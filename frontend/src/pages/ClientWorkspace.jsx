@@ -122,9 +122,29 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
   const [notice, setNotice] = useState("");
   const [noticeType, setNoticeType] = useState("info");
   const [busy, setBusy] = useState(false);
+  const [infoRequest, setInfoRequest] = useState({ loading: false, error: "", message: "" });
   const status = saved?.status;
   const readOnly = ["SUBMITTED", "UNDER_REVIEW", "APPROVED", "REJECTED"].includes(status);
   const finalDecision = ["APPROVED", "REJECTED"].includes(status);
+
+  useEffect(() => {
+    if (!saved?.id || status !== "NEEDS_INFO") {
+      setInfoRequest({ loading: false, error: "", message: "" });
+      return;
+    }
+    let active = true;
+    setInfoRequest({ loading: true, error: "", message: "" });
+    api.applicationEvents(saved.id)
+      .then((events) => {
+        if (!active) return;
+        const latestRequest = [...events].reverse().find((event) => event.event_type === "INFO_REQUESTED");
+        setInfoRequest({ loading: false, error: "", message: latestRequest?.message?.trim() || "" });
+      })
+      .catch((err) => {
+        if (active) setInfoRequest({ loading: false, error: err.message, message: "" });
+      });
+    return () => { active = false; };
+  }, [saved?.id, status]);
 
   const set = (field) => (event) => {
     if (readOnly) return;
@@ -173,6 +193,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
 
   return <div className="content content--form"><button className="back-link" onClick={onClose}>← К заявкам</button><div className="page-heading"><div><span className="eyebrow eyebrow--red">Шаг 2 из 2</span><h1>{saved ? "Заявка" : "Расскажите о бизнесе"}</h1>{saved && <StatusBadge status={status} />}<p>{readOnly ? (status === "APPROVED" ? "Заявка одобрена. Анкета доступна только для просмотра." : status === "REJECTED" ? "По заявке принято решение об отказе. Анкета доступна только для просмотра." : "Заявка уже отправлена и ожидает решения. Изменения пока недоступны.") : "Известные банку сведения уже заполнены. Добавьте только показатели для оценки."}</p></div><span className="big-number">02</span></div>
     {notice && <Alert type={noticeType}>{notice}</Alert>}
+    {status === "NEEDS_INFO" && <Alert title="Банк запросил уточнения">{infoRequest.loading ? "Загружаем сообщение сотрудника…" : infoRequest.error ? `Не удалось загрузить сообщение: ${infoRequest.error}` : infoRequest.message || "В истории нет текста запроса. Свяжитесь с сотрудником банка, чтобы уточнить, какие сведения нужно добавить."}</Alert>}
     <form className="application-layout" onSubmit={save}>
       <div className="application-main">
         <section className="panel form-section"><div className="form-section__heading"><span>01</span><div><h2>Компания</h2><p>Сведения действующего клиента</p></div></div><div className="company-card"><b>{company.name}</b><span>{company.legal_form} · ИНН {company.inn}</span><small>Работает с {new Date(company.registration_date).toLocaleDateString("ru-RU")}</small></div></section>

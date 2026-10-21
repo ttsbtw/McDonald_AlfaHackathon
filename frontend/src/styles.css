@@ -141,3 +141,10 @@ a { color: inherit; }
   .client-hero { padding: 45px; }.hero-shape { right: -100px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+.assessment__calculation { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 11px; display: flex; flex-direction: column; gap: 5px; background: #fff; font-size: 11px; line-height: 1.45; }
+.assessment__calculation strong { font-size: 11px; }
+.assessment__calculation > span { color: var(--muted); }
+.assessment__calculation > b { overflow-wrap: anywhere; font-size: 11px; font-weight: 750; }
+.assessment__calculation > small, .assessment__formula-note { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.assessment__formula-note { display: block; margin-top: 10px; }

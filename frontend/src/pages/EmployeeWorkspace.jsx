@@ -62,15 +62,31 @@ const checkReasonLabels = {
 function AssessmentSummary({ assessment }) {
   if (!assessment) return <section className="panel"><h2>Оценка системы</h2><p className="muted">Оценка пока не сформирована.</p></section>;
   const result = assessment.result || {};
+  const features = result.features || {};
+  const inputData = assessment.input_snapshot?.input_data || result.input_snapshot?.input_data || {};
   const checks = assessment.input_snapshot?.checks || result.input_snapshot?.checks || [];
   const missingFields = result.missing_fields || [];
   const validationErrors = result.validation_errors || [];
   return <section className="panel assessment"><div className="assessment__heading"><div><h2>Оценка системы</h2><p className="muted">Демонстрационная оценка по данным заявки. Итоговое решение принимает сотрудник.</p></div><span>{assessmentStatuses[result.assessment_status] || "Статус неизвестен"}</span></div>
     <div className="assessment__summary"><div className="assessment__score"><small>Балл</small><strong>{result.score ?? "—"}<span>{result.score === null || result.score === undefined ? "" : " / 100"}</span></strong><small>Риск: {riskLabels[result.risk_level] || "Не определён"}</small></div><div><small>Рекомендация системы</small><strong>{recommendationLabels[result.recommendation] || "Не сформирована"}</strong></div></div>
     {result.reasons?.length > 0 && <div className="assessment__section"><h3>Почему система дала такую рекомендацию</h3><ul>{result.reasons.map((reason, index) => <li key={`${reason.code || "reason"}-${index}`}>{reason.message || reason.code}</li>)}</ul></div>}
-    {result.factors?.length > 0 && <div className="assessment__section"><h3>Из чего сложился балл</h3><div className="assessment__factors">{result.factors.map((factor) => <article key={factor.code}><div><strong>{factorLabels[factor.code] || factor.code}</strong><b>{factor.points} из {factor.max_points}</b></div><p>{factor.explanation}</p></article>)}</div></div>}
+    {result.factors?.length > 0 && <div className="assessment__section"><h3>Из чего сложился балл</h3><div className="assessment__factors">{result.factors.map((factor) => <article key={factor.code}><div><strong>{factorLabels[factor.code] || factor.code}</strong><b>{factor.points} из {factor.max_points}</b></div><p>{factor.explanation}</p>{factor.code === "OPERATING_MARGIN" && <AssessmentFormula title="Расчёт операционной маржи" formula="(выручка − операционные расходы) / выручка" values={`(${formatCalcMoney(inputData.average_monthly_revenue)} − ${formatCalcMoney(inputData.average_monthly_operating_expenses)}) / ${formatCalcMoney(inputData.average_monthly_revenue)} = ${formatCalcPercent(features.operating_margin)}`} />}{factor.code === "DEBT_BURDEN" && <AssessmentFormula title="Расчёт долговой нагрузки" formula="(текущие платежи + платёж нового кредита) / прибыль после расходов" values={`(${formatCalcMoney(inputData.existing_monthly_debt_payment)} + ${formatCalcMoney(features.new_monthly_payment)}) / ${formatCalcMoney(features.monthly_operating_profit)} = ${formatCalcPercent(features.debt_burden)}`} note="Платёж нового кредита рассчитан по аннуитетной формуле." />}</article>)}</div><small className="assessment__formula-note">Проценты показаны с округлением до 2 знаков; скоринг использует точные значения.</small></div>}
     {checks.length > 0 && <div className="assessment__section"><h3>Проверки</h3><div className="assessment__checks">{checks.map((check) => <div key={check.source}><strong>{checkLabels[check.source] || check.source}</strong><span className={`assessment__check assessment__check--${String(check.status).toLowerCase()}`}>{checkStatuses[check.status] || check.status}</span><small>{checkReasonLabels[check.reason_code] || check.reason_code}</small></div>)}</div></div>}
     {result.hard_stops?.length > 0 && <div className="assessment__stops"><strong>Обязательные ограничения</strong><ul>{result.hard_stops.map((code) => <li key={code}>{result.reasons?.find((reason) => reason.code === code)?.message || code}</li>)}</ul></div>}
     {(missingFields.length > 0 || validationErrors.length > 0) && <div className="assessment__section"><h3>Что нужно уточнить</h3><ul>{missingFields.map((field) => <li key={field}>{fieldLabels[field] || field}</li>)}{validationErrors.map((item, index) => <li key={`${item.field || "validation"}-${index}`}>{item.message || fieldLabels[item.field] || item.field}</li>)}</ul></div>}
   </section>;
+}
+
+function AssessmentFormula({ title, formula, values, note }) {
+  return <div className="assessment__calculation"><strong>{title}</strong><span>{formula}</span><b>{values}</b>{note && <small>{note}</small>}</div>;
+}
+
+function formatCalcMoney(value) {
+  if (value === null || value === undefined || value === "" || !Number.isFinite(Number(value))) return "—";
+  return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(Number(value))} ₽`;
+}
+
+function formatCalcPercent(value) {
+  if (value === null || value === undefined || value === "" || !Number.isFinite(Number(value))) return "не рассчитывается";
+  return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(Number(value) * 100)}%`;
 }
