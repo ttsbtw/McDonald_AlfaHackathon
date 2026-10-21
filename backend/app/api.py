@@ -1,22 +1,31 @@
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import StaleDataError
 
-from .auth import DB, Client, CurrentUser, create_token, dummy_hash, password_hash
+from .auth import BankEmployee, Client, CurrentUser, DB, create_token, dummy_hash, password_hash
 from .errors import APIError
-from .models import Application, Company, CreditProduct, User, utc_now
+from .models import Application, ApplicationEvent, Assessment, Company, CreditProduct, ReviewAction, User, utc_now
+from .scoring import assess_application
+from .scoring.contracts import PolicyValidationError
 from .schemas import (
+    ApplicationEventOut,
+    AssessmentOut,
+    BankApplicationOut,
+    BankApplicationPage,
     CompanyOut,
+    DecisionIn,
     DraftCreate,
     DraftOut,
     DraftPage,
     DraftUpdate,
     ErrorResponse,
     ProductOut,
+    RequestInfoIn,
     TokenOut,
     UserOut,
 )
@@ -96,6 +105,11 @@ def create_draft(payload: DraftCreate, db: DB, user: Client, response: Response)
     validate_product(db, payload.product_code)
     item = Application(owner_id=user.id, company_id=company.id, **payload.model_dump())
     db.add(item)
+    db.flush()
+    db.add(ApplicationEvent(
+        application_id=item.id, actor_id=user.id, application_revision=item.revision,
+        event_type="DRAFT_CREATED", from_status=None, to_status="DRAFT",
+    ))
     db.commit()
     response.headers["Location"] = f"/api/v1/applications/{item.id}"
     return item
@@ -117,6 +131,202 @@ def get_draft(application_id: UUID, db: DB, user: Client):
     return own_application(db, user, application_id)
 
 
+@router.delete("/applications/{application_id}", status_code=204, response_class=Response, tags=["Черновики"])
+def delete_draft(application_id: UUID, db: DB, user: Client):
+    item = own_application(db, user, application_id)
+    if item.status != "DRAFT":
+        raise APIError(409, "APPLICATION_NOT_DELETABLE", "Удалить можно только черновик со статусом DRAFT.")
+    db.delete(item)
+    try:
+        db.commit()
+    except StaleDataError:
+        db.rollback()
+        raise APIError(409, "REVISION_CONFLICT", "Черновик изменён. Обновите список заявок.") from None
+    return Response(status_code=204)
+
+
+@router.get("/applications/{application_id}/events", response_model=list[ApplicationEventOut], tags=["Заявки"])
+def application_events(application_id: UUID, db: DB, user: Client):
+    own_application(db, user, application_id)
+    return db.scalars(
+        select(ApplicationEvent)
+        .where(ApplicationEvent.application_id == application_id)
+        .order_by(ApplicationEvent.created_at, ApplicationEvent.id)
+    ).all()
+
+
+def bank_application_query():
+    latest_revision = (
+        select(func.max(Assessment.application_revision))
+        .where(Assessment.application_id == Application.id)
+        .correlate(Application)
+        .scalar_subquery()
+    )
+    return (
+        select(Application, Company, User, CreditProduct, Assessment)
+        .join(Company, Company.id == Application.company_id)
+        .join(User, User.id == Application.owner_id)
+        .outerjoin(CreditProduct, CreditProduct.code == Application.product_code)
+        .outerjoin(Assessment, and_(
+            Assessment.application_id == Application.id,
+            Assessment.application_revision == latest_revision,
+        ))
+    )
+
+
+def bank_application_out(row):
+    item, company, client, product, assessment = row
+    result = assessment.result if assessment else {}
+    return BankApplicationOut(
+        **DraftOut.model_validate(item).model_dump(),
+        client=client,
+        company=company,
+        product=product,
+        risk_level=result.get("risk_level"),
+        score=result.get("score"),
+        recommendation=result.get("recommendation"),
+    )
+
+
+@router.get("/bank/applications", response_model=BankApplicationPage, tags=["Рабочее место сотрудника"])
+def bank_applications(
+    db: DB,
+    user: BankEmployee,
+    status: Annotated[Literal["SUBMITTED", "UNDER_REVIEW", "NEEDS_INFO", "APPROVED", "REJECTED"] | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    filters = [Application.status != "DRAFT"]
+    if status is not None:
+        filters.append(Application.status == status)
+    items = db.execute(
+        bank_application_query().where(*filters)
+        .order_by(Application.created_at, Application.id)
+        .limit(limit).offset(offset)
+    ).all()
+    total = db.scalar(select(func.count()).select_from(Application).where(*filters))
+    return {"items": [bank_application_out(row) for row in items], "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/bank/applications/{application_id}", response_model=BankApplicationOut, tags=["Рабочее место сотрудника"])
+def bank_application(application_id: UUID, db: DB, user: BankEmployee):
+    row = db.execute(bank_application_query().where(
+        Application.id == application_id, Application.status != "DRAFT",
+    )).one_or_none()
+    if row is None:
+        raise APIError(404, "APPLICATION_NOT_FOUND", "Заявка не найдена.")
+    return bank_application_out(row)
+
+
+@router.get("/bank/applications/{application_id}/assessments", response_model=list[AssessmentOut], tags=["Рабочее место сотрудника"])
+def bank_assessments(application_id: UUID, db: DB, user: BankEmployee):
+    item = db.get(Application, application_id)
+    if item is None or item.status == "DRAFT":
+        raise APIError(404, "APPLICATION_NOT_FOUND", "Заявка не найдена.")
+    return db.scalars(
+        select(Assessment)
+        .where(Assessment.application_id == application_id)
+        .order_by(Assessment.application_revision.desc())
+    ).all()
+
+
+def current_assessment(db, item):
+    assessment = db.scalar(
+        select(Assessment)
+        .where(Assessment.application_id == item.id)
+        .order_by(Assessment.application_revision.desc())
+        .limit(1)
+    )
+    if assessment is None:
+        raise APIError(409, "ASSESSMENT_REQUIRED", "Для заявки нет сохранённой оценки.")
+    if assessment.application_revision + 1 != item.revision:
+        raise APIError(409, "ASSESSMENT_STALE", "Оценка устарела. Клиент должен повторно отправить актуальную редакцию.")
+    return assessment
+
+
+def save_review_action(db, item, employee, assessment, action, message, target_status, **terms):
+    previous_status = item.status
+    db.add(ReviewAction(
+        application_id=item.id,
+        assessment_id=assessment.id,
+        application_revision=assessment.application_revision,
+        employee_id=employee.id,
+        action=action,
+        comment=message,
+        **terms,
+    ))
+    item.status = target_status
+    item.updated_at = utc_now()
+    try:
+        db.flush()
+        db.add(ApplicationEvent(
+            application_id=item.id,
+            actor_id=employee.id,
+            application_revision=item.revision,
+            event_type="INFO_REQUESTED" if action == "REQUEST_INFO" else action,
+            from_status=previous_status,
+            to_status=target_status,
+            message=message,
+        ))
+        db.commit()
+    except (StaleDataError, IntegrityError):
+        db.rollback()
+        raise APIError(409, "REVIEW_CONFLICT", "Заявку уже изменил другой сотрудник. Обновите карточку.") from None
+    return item
+
+
+@router.post("/bank/applications/{application_id}/request-info", response_model=DraftOut, tags=["Рабочее место сотрудника"])
+def request_application_info(application_id: UUID, payload: RequestInfoIn, db: DB, user: BankEmployee):
+    item = db.get(Application, application_id)
+    if item is None:
+        raise APIError(404, "APPLICATION_NOT_FOUND", "Заявка не найдена.")
+    if item.status != "UNDER_REVIEW":
+        raise APIError(409, "APPLICATION_NOT_REVIEWABLE", "Уточнение можно запросить только по заявке на рассмотрении.")
+    assessment = current_assessment(db, item)
+    return save_review_action(
+        db, item, user, assessment, "REQUEST_INFO", payload.comment, "NEEDS_INFO",
+    )
+
+
+@router.post("/bank/applications/{application_id}/decision", response_model=DraftOut, tags=["Рабочее место сотрудника"])
+def decide_application(application_id: UUID, payload: DecisionIn, db: DB, user: BankEmployee):
+    item = db.get(Application, application_id)
+    if item is None:
+        raise APIError(404, "APPLICATION_NOT_FOUND", "Заявка не найдена.")
+    if item.status != "UNDER_REVIEW":
+        raise APIError(409, "APPLICATION_NOT_REVIEWABLE", "Решение можно принять только по заявке на рассмотрении.")
+    assessment = current_assessment(db, item)
+    result = assessment.result
+
+    if payload.decision == "REJECTED":
+        if not payload.comment:
+            raise APIError(422, "DECISION_REASON_REQUIRED", "Укажите понятную причину отказа.", fields=[{
+                "field": "comment", "code": "REQUIRED", "message": "Для отказа укажите причину.",
+            }])
+        message = payload.comment
+        terms = {}
+    else:
+        if result.get("assessment_status") != "COMPLETED" or result.get("missing_fields"):
+            raise APIError(409, "ASSESSMENT_INCOMPLETE", "Нельзя одобрить заявку без полной оценки и проверок.")
+        if result.get("hard_stops"):
+            raise APIError(409, "ASSESSMENT_HARD_STOP", "Нельзя одобрить заявку с обязательным ограничением.")
+        product = db.get(CreditProduct, item.product_code)
+        if product is None:
+            raise APIError(409, "PRODUCT_UNAVAILABLE", "Не удалось получить условия продукта.")
+        amount = item.requested_amount
+        term = item.term_months
+        rate = product.annual_interest_rate
+        conditions = (
+            f"Условия демо-продукта: {amount:.2f} руб., {term} мес., "
+            f"расчётная ставка {rate:.2f}% годовых."
+        )
+        message = f"{payload.comment.strip()}\n{conditions}" if payload.comment else conditions
+        terms = {"approved_amount": amount, "approved_term_months": term, "annual_interest_rate": rate}
+    return save_review_action(
+        db, item, user, assessment, payload.decision, message, payload.decision, **terms,
+    )
+
+
 @router.patch("/applications/{application_id}", response_model=DraftOut, tags=["Черновики"])
 def update_draft(application_id: UUID, payload: DraftUpdate, db: DB, user: Client):
     item = own_application(db, user, application_id)
@@ -127,13 +337,90 @@ def update_draft(application_id: UUID, payload: DraftUpdate, db: DB, user: Clien
     changes = payload.model_dump(exclude_unset=True, exclude={"revision"})
     if "product_code" in changes:
         validate_product(db, changes["product_code"])
+    old_status = item.status
     for field, value in changes.items():
         setattr(item, field, value)
     if changes:
         item.updated_at = utc_now()
     try:
+        if changes:
+            db.flush()
+            db.add(ApplicationEvent(
+                application_id=item.id, actor_id=user.id, application_revision=item.revision,
+                event_type="DRAFT_UPDATED", from_status=old_status, to_status=old_status,
+            ))
         db.commit()
     except StaleDataError:
         db.rollback()
         raise APIError(409, "REVISION_CONFLICT", "Заявка изменена. Загрузите актуальную версию.") from None
+    return item
+
+
+@router.post("/applications/{application_id}/submit", response_model=DraftOut, tags=["Заявки"])
+def submit_application(application_id: UUID, db: DB, user: Client):
+    item = own_application(db, user, application_id)
+    if item.status == "UNDER_REVIEW":
+        # Retrying a successful submit is safe and does not create another assessment.
+        return item
+    if item.status not in ("DRAFT", "NEEDS_INFO"):
+        raise APIError(409, "APPLICATION_NOT_SUBMITTABLE", "Заявку нельзя отправить из текущего состояния.")
+
+    required = (
+        "product_code", "requested_amount", "term_months", "purpose",
+        "average_monthly_revenue", "average_monthly_operating_expenses",
+        "existing_monthly_debt_payment",
+    )
+    missing = [{"field": field, "code": "REQUIRED", "message": "Заполните обязательное поле."}
+               for field in required if getattr(item, field) is None]
+    if missing:
+        raise APIError(422, "APPLICATION_INCOMPLETE", "Заполните обязательные поля перед отправкой.", fields=missing)
+
+    product = db.get(CreditProduct, item.product_code)
+    company = db.get(Company, item.company_id)
+    if product is None or not product.is_active or company is None:
+        raise APIError(409, "APPLICATION_DATA_UNAVAILABLE", "Не удалось получить данные продукта или компании.")
+
+    # Local deterministic simulators: the demo company registry confirms the
+    # stored synthetic company, and credit-history fixtures have no delinquencies.
+    checks = [
+        {"source": "company_registry", "status": "PASS", "reason_code": "SYNTHETIC_COMPANY_MATCH"},
+        {"source": "credit_history", "status": "PASS", "reason_code": "NO_DEMO_DELINQUENCIES"},
+    ]
+    as_of_date = utc_now().date()
+    input_data = {
+        "schema_version": "1.0", "application_id": str(item.id),
+        "application_revision": item.revision, "as_of_date": as_of_date.isoformat(),
+        "product_code": item.product_code, "requested_amount": item.requested_amount,
+        "term_months": item.term_months, "purpose": item.purpose,
+        "legal_form": company.legal_form, "registration_date": company.registration_date.isoformat(),
+        "average_monthly_revenue": item.average_monthly_revenue,
+        "average_monthly_operating_expenses": item.average_monthly_operating_expenses,
+        "existing_monthly_debt_payment": item.existing_monthly_debt_payment,
+        "current_overdue_amount": "0.00", "max_overdue_days_12m": 0,
+    }
+    try:
+        result = assess_application(input_data, product.scoring_policy, checks)
+    except PolicyValidationError:
+        raise APIError(503, "SCORING_POLICY_INVALID", "Правила оценки продукта временно недоступны.") from None
+
+    previous_status = item.status
+    assessment = Assessment(
+        application_id=item.id, application_revision=item.revision,
+        input_snapshot=result["input_snapshot"] or {"input_data": input_data, "checks": checks},
+        result=result,
+    )
+    db.add(assessment)
+    item.status = "UNDER_REVIEW"
+    item.updated_at = utc_now()
+    try:
+        db.flush()
+        db.add(ApplicationEvent(
+            application_id=item.id, actor_id=user.id, application_revision=item.revision,
+            event_type="RESUBMITTED" if previous_status == "NEEDS_INFO" else "SUBMITTED",
+            from_status=previous_status, to_status="UNDER_REVIEW",
+        ))
+        db.commit()
+    except StaleDataError:
+        db.rollback()
+        raise APIError(409, "REVISION_CONFLICT", "Заявка изменилась. Загрузите актуальную версию.") from None
     return item

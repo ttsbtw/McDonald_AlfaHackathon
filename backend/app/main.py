@@ -21,16 +21,15 @@ def create_app(settings=None):
         engine.dispose()
 
     app = FastAPI(
-        title="Умный кредитный кабинет — API черновиков", version="0.1.0",
-        description="Вход действующих клиентов, каталог и сохранение своих черновиков. "
-                    "Отправка на рассмотрение и итоговое решение будут добавлены отдельно.",
+        title="Умный кредитный кабинет — API заявок", version="0.5.0",
+        description="Вход клиентов и сотрудников, каталог, заявки, оценки, решения и история рассмотрения.",
         lifespan=lifespan,
     )
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
-                       allow_methods=["GET", "POST", "PATCH"],
+                       allow_methods=["GET", "POST", "PATCH", "DELETE"],
                        allow_headers=["Authorization", "Content-Type"])
     register_errors(app)
     app.include_router(router)
@@ -44,7 +43,7 @@ def create_app(settings=None):
         try:
             with engine.connect() as connection:
                 version = connection.scalar(text("SELECT version_num FROM alembic_version"))
-                if version != "0001_backend_drafts":
+                if version != "0004_review_actions":
                     raise APIError(503, "MIGRATIONS_REQUIRED", "Требуется применить миграции.")
         except SQLAlchemyError:
             raise APIError(503, "DATABASE_NOT_READY", "База данных ещё не готова.") from None

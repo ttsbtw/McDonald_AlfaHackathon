@@ -108,6 +108,62 @@ class DraftPage(APIModel):
     offset: int
 
 
+class ApplicationEventOut(APIModel):
+    id: UUID
+    application_revision: int
+    event_type: Literal[
+        "DRAFT_CREATED", "DRAFT_UPDATED", "SUBMITTED", "RESUBMITTED",
+        "INFO_REQUESTED", "APPROVED", "REJECTED",
+    ]
+    from_status: Literal["DRAFT", "SUBMITTED", "UNDER_REVIEW", "NEEDS_INFO", "APPROVED", "REJECTED"] | None
+    to_status: Literal["DRAFT", "SUBMITTED", "UNDER_REVIEW", "NEEDS_INFO", "APPROVED", "REJECTED"]
+    message: str | None
+    created_at: datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def normalize_utc(cls, value):
+        return value.astimezone(timezone.utc)
+
+
+class BankApplicationOut(DraftOut):
+    client: UserOut
+    company: CompanyOut
+    product: ProductOut | None
+    risk_level: Literal["LOW", "MEDIUM", "HIGH", "UNKNOWN"] | None
+    score: int | None
+    recommendation: Literal["APPROVE", "REVIEW", "DECLINE", "REQUEST_INFO"] | None
+
+
+class BankApplicationPage(APIModel):
+    items: list[BankApplicationOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class AssessmentOut(APIModel):
+    id: UUID
+    application_revision: int
+    input_snapshot: dict
+    result: dict
+    created_at: datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def normalize_utc(cls, value):
+        return value.astimezone(timezone.utc)
+
+
+class RequestInfoIn(APIModel):
+    comment: str = Field(min_length=1, max_length=1000)
+
+
+class DecisionIn(APIModel):
+    decision: Literal["APPROVED", "REJECTED"]
+    comment: str | None = Field(default=None, max_length=1000)
+
+
 class FieldError(APIModel):
     field: str
     code: str

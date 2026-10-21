@@ -110,3 +110,73 @@ class Application(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
     __mapper_args__ = {"version_id_col": revision}
+
+
+class Assessment(Base):
+    """Immutable scoring snapshot for one submitted application revision."""
+    __tablename__ = "assessments"
+    __table_args__ = (
+        UniqueConstraint("application_id", "application_revision", name="uq_assessment_application_revision"),
+        Index("ix_assessments_application_created", "application_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    application_id: Mapped[UUID] = mapped_column(ForeignKey("applications.id", ondelete="CASCADE"))
+    application_revision: Mapped[int] = mapped_column(Integer)
+    input_snapshot: Mapped[dict] = mapped_column(JSONB)
+    result: Mapped[dict] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ApplicationEvent(Base):
+    """Append-only audit trail of application edits and state transitions."""
+    __tablename__ = "application_events"
+    __table_args__ = (
+        Index("ix_application_events_application_created", "application_id", "created_at", "id"),
+        CheckConstraint(
+            "from_status IS NULL OR from_status IN ('DRAFT', 'SUBMITTED', 'UNDER_REVIEW', 'NEEDS_INFO', 'APPROVED', 'REJECTED')",
+            name="ck_application_event_from_status",
+        ),
+        CheckConstraint(
+            "to_status IN ('DRAFT', 'SUBMITTED', 'UNDER_REVIEW', 'NEEDS_INFO', 'APPROVED', 'REJECTED')",
+            name="ck_application_event_to_status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    application_id: Mapped[UUID] = mapped_column(ForeignKey("applications.id", ondelete="CASCADE"))
+    actor_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    application_revision: Mapped[int] = mapped_column(Integer)
+    event_type: Mapped[str] = mapped_column(String(32))
+    from_status: Mapped[str | None] = mapped_column(String(20))
+    to_status: Mapped[str] = mapped_column(String(20))
+    message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ReviewAction(Base):
+    """Employee action tied to the exact assessment used for the decision."""
+    __tablename__ = "review_actions"
+    __table_args__ = (
+        UniqueConstraint("application_id", "application_revision", name="uq_review_action_application_revision"),
+        CheckConstraint("action IN ('REQUEST_INFO', 'APPROVED', 'REJECTED')", name="ck_review_action_action"),
+        CheckConstraint(
+            "(action = 'APPROVED' AND approved_amount IS NOT NULL AND approved_term_months IS NOT NULL "
+            "AND annual_interest_rate IS NOT NULL) OR "
+            "(action <> 'APPROVED' AND approved_amount IS NULL AND approved_term_months IS NULL "
+            "AND annual_interest_rate IS NULL)",
+            name="ck_review_action_approval_terms",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    application_id: Mapped[UUID] = mapped_column(ForeignKey("applications.id", ondelete="CASCADE"))
+    assessment_id: Mapped[UUID] = mapped_column(ForeignKey("assessments.id"))
+    application_revision: Mapped[int] = mapped_column(Integer)
+    employee_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    action: Mapped[str] = mapped_column(String(20))
+    comment: Mapped[str] = mapped_column(Text)
+    approved_amount: Mapped[Decimal | None] = mapped_column(Numeric(15, 2))
+    approved_term_months: Mapped[int | None] = mapped_column(Integer)
+    annual_interest_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

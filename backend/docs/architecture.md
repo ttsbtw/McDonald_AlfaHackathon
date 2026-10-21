@@ -2,7 +2,7 @@
 
 ```mermaid
 flowchart LR
-    Browser[Swagger / будущий frontend] --> API[FastAPI]
+    Browser[Кабинеты клиента и сотрудника] --> API[FastAPI]
     API --> Auth[Проверка токена и пользователя]
     API --> ORM[SQLAlchemy]
     ORM --> PG[(PostgreSQL)]
@@ -21,6 +21,12 @@ erDiagram
     USERS ||--o{ APPLICATIONS : creates
     COMPANIES ||--o{ APPLICATIONS : belongs_to
     CREDIT_PRODUCTS o|--o{ APPLICATIONS : selected
+    APPLICATIONS ||--o{ ASSESSMENTS : assessed_as
+    APPLICATIONS ||--o{ APPLICATION_EVENTS : records
+    APPLICATIONS ||--o{ REVIEW_ACTIONS : reviewed_by
+    ASSESSMENTS ||--o{ REVIEW_ACTIONS : used_for
+    USERS ||--o{ REVIEW_ACTIONS : decides
+    USERS ||--o{ APPLICATION_EVENTS : acts
     USERS {
         uuid id PK
         string username UK
@@ -62,6 +68,38 @@ erDiagram
         timestamptz created_at
         timestamptz updated_at
     }
+    ASSESSMENTS {
+        uuid id PK
+        uuid application_id FK
+        int application_revision
+        jsonb input_snapshot
+        jsonb result
+        timestamptz created_at
+    }
+    APPLICATION_EVENTS {
+        uuid id PK
+        uuid application_id FK
+        uuid actor_id FK
+        int application_revision
+        string event_type
+        string from_status
+        string to_status
+        text message
+        timestamptz created_at
+    }
+    REVIEW_ACTIONS {
+        uuid id PK
+        uuid application_id FK
+        uuid assessment_id FK
+        uuid employee_id FK
+        int application_revision
+        string action
+        text comment
+        numeric approved_amount
+        int approved_term_months
+        numeric annual_interest_rate
+        timestamptz created_at
+    }
 ```
 
 Составной внешний ключ `(company_id, owner_id)` дополнительно запрещает связать
@@ -69,11 +107,19 @@ erDiagram
 Деньги хранятся в NUMERIC(15, 2), даты событий — TIMESTAMPTZ; API нормализует UTC.
 JSONB используется только для серверных условий скоринга, не вместо колонок анкеты.
 
-В этой задаче API создаёт только `DRAFT`; иных переходов пока нет. PATCH разрешён
-для `DRAFT` и зарезервированного `NEEDS_INFO`. Значения остальных состояний
-подготовлены в ограничении БД для следующей задачи, но клиент не может их задать.
-Таблицы оценок, событий и решений намеренно не добавлены до реализации обработки.
+Клиент создаёт черновики, редактирует их в `DRAFT`/`NEEDS_INFO` и отправляет
+полную анкету. Backend сохраняет оценку и переводит заявку в `UNDER_REVIEW`.
+Создание, редактирование и отправка атомарно записываются в историю событий.
+Повторная подача после `NEEDS_INFO` сохраняет новую оценку отдельно от старых.
+Очередь и карточку заявки читает только сотрудник банка; незавершённые черновики
+сотруднику не видны. Сотрудник может запросить уточнение, одобрить или отклонить
+заявку только по актуальной оценке. Событие перехода, комментарий, оценка и
+итоговые условия одобрения сохраняются одной транзакцией.
 
-Модуль `app.scoring` — отдельная чистая функция. Тест совместимости демонстрирует
-маппинг анкеты и компании к его контракту. В рабочем HTTP-сценарии этой задачи
-скоринг ещё не вызывается: отсутствуют отправка и симуляторы внешних проверок.
+Удалить заявку клиент может только в `DRAFT`; удаление каскадно убирает её
+события. Действия сотрудника записываются отдельно и защищены уникальностью
+по редакции оценки.
+
+Модуль `app.scoring` — отдельная чистая функция. При отправке backend передаёт
+ему анкету, сведения компании и результаты локальных симуляторов. Каждая оценка
+сохраняет входной снимок, результат и редакцию заявки.
