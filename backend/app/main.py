@@ -21,9 +21,8 @@ def create_app(settings=None):
         engine.dispose()
 
     app = FastAPI(
-        title="Умный кредитный кабинет — API черновиков", version="0.1.0",
-        description="Вход действующих клиентов, каталог и сохранение своих черновиков. "
-                    "Отправка на рассмотрение и итоговое решение будут добавлены отдельно.",
+        title="Умный кредитный кабинет — API заявок", version="0.2.0",
+        description="Вход действующих клиентов, каталог, черновики и автоматическая оценка при отправке заявки.",
         lifespan=lifespan,
     )
     app.state.settings = settings
@@ -44,7 +43,7 @@ def create_app(settings=None):
         try:
             with engine.connect() as connection:
                 version = connection.scalar(text("SELECT version_num FROM alembic_version"))
-                if version != "0001_backend_drafts":
+                if version != "0002_assessments":
                     raise APIError(503, "MIGRATIONS_REQUIRED", "Требуется применить миграции.")
         except SQLAlchemyError:
             raise APIError(503, "DATABASE_NOT_READY", "База данных ещё не готова.") from None

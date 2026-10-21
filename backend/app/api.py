@@ -8,7 +8,9 @@ from sqlalchemy.orm.exc import StaleDataError
 
 from .auth import DB, Client, CurrentUser, create_token, dummy_hash, password_hash
 from .errors import APIError
-from .models import Application, Company, CreditProduct, User, utc_now
+from .models import Application, Assessment, Company, CreditProduct, User, utc_now
+from .scoring import assess_application
+from .scoring.contracts import PolicyValidationError
 from .schemas import (
     CompanyOut,
     DraftCreate,
@@ -136,4 +138,67 @@ def update_draft(application_id: UUID, payload: DraftUpdate, db: DB, user: Clien
     except StaleDataError:
         db.rollback()
         raise APIError(409, "REVISION_CONFLICT", "Заявка изменена. Загрузите актуальную версию.") from None
+    return item
+
+
+@router.post("/applications/{application_id}/submit", response_model=DraftOut, tags=["Заявки"])
+def submit_application(application_id: UUID, db: DB, user: Client):
+    item = own_application(db, user, application_id)
+    if item.status == "UNDER_REVIEW":
+        # Retrying a successful submit is safe and does not create another assessment.
+        return item
+    if item.status not in ("DRAFT", "NEEDS_INFO"):
+        raise APIError(409, "APPLICATION_NOT_SUBMITTABLE", "Заявку нельзя отправить из текущего состояния.")
+
+    required = (
+        "product_code", "requested_amount", "term_months", "purpose",
+        "average_monthly_revenue", "average_monthly_operating_expenses",
+        "existing_monthly_debt_payment",
+    )
+    missing = [{"field": field, "code": "REQUIRED", "message": "Заполните обязательное поле."}
+               for field in required if getattr(item, field) is None]
+    if missing:
+        raise APIError(422, "APPLICATION_INCOMPLETE", "Заполните обязательные поля перед отправкой.", fields=missing)
+
+    product = db.get(CreditProduct, item.product_code)
+    company = db.get(Company, item.company_id)
+    if product is None or not product.is_active or company is None:
+        raise APIError(409, "APPLICATION_DATA_UNAVAILABLE", "Не удалось получить данные продукта или компании.")
+
+    # Local deterministic simulators: the demo company registry confirms the
+    # stored synthetic company, and credit-history fixtures have no delinquencies.
+    checks = [
+        {"source": "company_registry", "status": "PASS", "reason_code": "SYNTHETIC_COMPANY_MATCH"},
+        {"source": "credit_history", "status": "PASS", "reason_code": "NO_DEMO_DELINQUENCIES"},
+    ]
+    as_of_date = utc_now().date()
+    input_data = {
+        "schema_version": "1.0", "application_id": str(item.id),
+        "application_revision": item.revision, "as_of_date": as_of_date.isoformat(),
+        "product_code": item.product_code, "requested_amount": item.requested_amount,
+        "term_months": item.term_months, "purpose": item.purpose,
+        "legal_form": company.legal_form, "registration_date": company.registration_date.isoformat(),
+        "average_monthly_revenue": item.average_monthly_revenue,
+        "average_monthly_operating_expenses": item.average_monthly_operating_expenses,
+        "existing_monthly_debt_payment": item.existing_monthly_debt_payment,
+        "current_overdue_amount": "0.00", "max_overdue_days_12m": 0,
+    }
+    try:
+        result = assess_application(input_data, product.scoring_policy, checks)
+    except PolicyValidationError:
+        raise APIError(503, "SCORING_POLICY_INVALID", "Правила оценки продукта временно недоступны.") from None
+
+    assessment = Assessment(
+        application_id=item.id, application_revision=item.revision,
+        input_snapshot=result["input_snapshot"] or {"input_data": input_data, "checks": checks},
+        result=result,
+    )
+    db.add(assessment)
+    item.status = "UNDER_REVIEW"
+    item.updated_at = utc_now()
+    try:
+        db.commit()
+    except StaleDataError:
+        db.rollback()
+        raise APIError(409, "REVISION_CONFLICT", "Заявка изменилась. Загрузите актуальную версию.") from None
     return item

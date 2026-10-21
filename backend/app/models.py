@@ -110,3 +110,19 @@ class Application(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
     __mapper_args__ = {"version_id_col": revision}
+
+
+class Assessment(Base):
+    """Immutable scoring snapshot for one submitted application revision."""
+    __tablename__ = "assessments"
+    __table_args__ = (
+        UniqueConstraint("application_id", "application_revision", name="uq_assessment_application_revision"),
+        Index("ix_assessments_application_created", "application_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    application_id: Mapped[UUID] = mapped_column(ForeignKey("applications.id", ondelete="CASCADE"))
+    application_revision: Mapped[int] = mapped_column(Integer)
+    input_snapshot: Mapped[dict] = mapped_column(JSONB)
+    result: Mapped[dict] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
