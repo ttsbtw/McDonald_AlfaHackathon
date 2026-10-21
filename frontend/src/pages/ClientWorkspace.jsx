@@ -45,7 +45,7 @@ function NeedStep({ products, initial, onBack, onContinue }) {
   </div>;
 }
 
-function Editor({ application, product, company, need, onClose, onSaved }) {
+function Editor({ application, product, company, need, onClose, onSaved, onDeleted }) {
   const [form, setForm] = useState(() => application ? { ...emptyForm, ...application } : {
     ...emptyForm, product_code: product?.code || "", requested_amount: need?.amount || "", term_months: need?.termMonths || "",
     purpose: PURPOSES.find((item) => item.value === need?.purposeCode)?.label || "",
@@ -53,6 +53,7 @@ function Editor({ application, product, company, need, onClose, onSaved }) {
   const [saved, setSaved] = useState(application || null);
   const [errors, setErrors] = useState({});
   const [notice, setNotice] = useState("");
+  const [noticeType, setNoticeType] = useState("info");
   const [busy, setBusy] = useState(false);
 
   const set = (field) => (event) => setForm({ ...form, [field]: event.target.value });
@@ -61,10 +62,10 @@ function Editor({ application, product, company, need, onClose, onSaved }) {
     try {
       const payload = draftPayload(form);
       const result = saved ? await api.updateApplication(saved.id, { revision: saved.revision, ...payload }) : await api.createApplication(payload);
-      setSaved(result); setForm({ ...emptyForm, ...result }); setNotice("Черновик сохранён"); onSaved(result);
+      setSaved(result); setForm({ ...emptyForm, ...result }); setNotice("Черновик сохранён"); setNoticeType("success"); onSaved(result);
     } catch (err) {
       if (err instanceof ApiError && err.fields.length) setErrors(Object.fromEntries(err.fields.map((item) => [item.field.split(".").pop(), item.message])));
-      setNotice(err.message);
+      setNotice(err.message); setNoticeType("error");
     } finally { setBusy(false); }
   }
   async function submit() {
@@ -76,22 +77,33 @@ function Editor({ application, product, company, need, onClose, onSaved }) {
       if (!current) current = await api.createApplication(draftPayload(form));
       else current = await api.updateApplication(current.id, { revision: current.revision, ...draftPayload(form) });
       const result = await api.submitApplication(current.id);
-      setSaved(result); onSaved(result); setNotice("Заявка отправлена на рассмотрение");
+      setSaved(result); onSaved(result); setNotice("Заявка отправлена на рассмотрение"); setNoticeType("success");
     } catch (err) {
-      if (err.status === 404 || err.status === 405) setNotice("Отправка появится после подключения backend-процесса задачи №5. Черновик сохранён и не потерян.");
-      else setNotice(err.message);
+      if (err.status === 404 || err.status === 405) { setNotice("Отправка появится после подключения backend-процесса задачи №5. Черновик сохранён и не потерян."); setNoticeType("info"); }
+      else { setNotice(err.message); setNoticeType("error"); }
+    } finally { setBusy(false); }
+  }
+
+  async function deleteDraft() {
+    if (!saved || saved.status !== "DRAFT" || !window.confirm("Удалить этот черновик? Восстановить его не получится.")) return;
+    setBusy(true); setNotice("");
+    try {
+      await api.deleteApplication(saved.id);
+      onDeleted(saved.id);
+    } catch (err) {
+      setNotice(err.message); setNoticeType("error");
     } finally { setBusy(false); }
   }
 
   return <div className="content content--form"><button className="back-link" onClick={onClose}>← К заявкам</button><div className="page-heading"><div><span className="eyebrow eyebrow--red">Шаг 2 из 2</span><h1>{saved ? "Заявка" : "Расскажите о бизнесе"}</h1><p>Известные банку сведения уже заполнены. Добавьте только показатели для оценки.</p></div><span className="big-number">02</span></div>
-    {notice && <Alert type={notice.includes("сохранён") ? "success" : "info"}>{notice}</Alert>}
+    {notice && <Alert type={noticeType}>{notice}</Alert>}
     <form className="application-layout" onSubmit={save}>
       <div className="application-main">
         <section className="panel form-section"><div className="form-section__heading"><span>01</span><div><h2>Компания</h2><p>Сведения действующего клиента</p></div></div><div className="company-card"><b>{company.name}</b><span>{company.legal_form} · ИНН {company.inn}</span><small>Работает с {new Date(company.registration_date).toLocaleDateString("ru-RU")}</small></div></section>
         <section className="panel form-section"><div className="form-section__heading"><span>02</span><div><h2>Параметры кредита</h2><p>Можно изменить до отправки</p></div></div><Field label="Продукт" error={errors.product_code}><input value={product?.name || form.product_code} disabled /></Field><div className="form-row"><Field label="Сумма" error={errors.requested_amount}><div className="input-suffix"><input inputMode="decimal" value={form.requested_amount ?? ""} onChange={set("requested_amount")} /><span>₽</span></div></Field><Field label="Срок" error={errors.term_months}><div className="input-suffix"><input inputMode="numeric" value={form.term_months ?? ""} onChange={set("term_months")} /><span>мес.</span></div></Field></div><Field label="Цель" error={errors.purpose}><textarea rows="3" maxLength="200" value={form.purpose ?? ""} onChange={set("purpose")} /></Field></section>
         <section className="panel form-section"><div className="form-section__heading"><span>03</span><div><h2>Финансовые показатели</h2><p>Средние значения за последние 12 завершённых месяцев</p></div></div><div className="form-row"><Field label="Выручка в месяц" error={errors.average_monthly_revenue}><div className="input-suffix"><input inputMode="decimal" value={form.average_monthly_revenue ?? ""} onChange={set("average_monthly_revenue")} /><span>₽</span></div></Field><Field label="Операционные расходы" hint="Без платежей по кредитам" error={errors.average_monthly_operating_expenses}><div className="input-suffix"><input inputMode="decimal" value={form.average_monthly_operating_expenses ?? ""} onChange={set("average_monthly_operating_expenses")} /><span>₽</span></div></Field></div><Field label="Ежемесячные платежи по действующим кредитам" error={errors.existing_monthly_debt_payment}><div className="input-suffix"><input inputMode="decimal" value={form.existing_monthly_debt_payment ?? ""} onChange={set("existing_monthly_debt_payment")} /><span>₽</span></div></Field></section>
       </div>
-      <aside className="application-aside"><div className="panel sticky-card"><span className="eyebrow">Перед отправкой</span><h3>Что произойдёт дальше</h3><ol><li>Проверим полноту анкеты</li><li>Выполним локальные проверки</li><li>Передадим сотруднику банка</li></ol><Button type="submit" variant="secondary" busy={busy}>Сохранить черновик</Button><Button type="button" onClick={submit} busy={busy}>Отправить заявку</Button><small>Отправляя заявку, вы подтверждаете корректность синтетических данных.</small></div></aside>
+      <aside className="application-aside"><div className="panel sticky-card"><span className="eyebrow">Перед отправкой</span><h3>Что произойдёт дальше</h3><ol><li>Проверим полноту анкеты</li><li>Выполним локальные проверки</li><li>Передадим сотруднику банка</li></ol><Button type="submit" variant="secondary" busy={busy}>Сохранить черновик</Button><Button type="button" onClick={submit} busy={busy}>Отправить заявку</Button>{saved?.status === "DRAFT" && <Button type="button" variant="ghost" busy={busy} onClick={deleteDraft}>Удалить черновик</Button>}<small>Отправляя заявку, вы подтверждаете корректность синтетических данных.</small></div></aside>
     </form>
   </div>;
 }
@@ -109,6 +121,6 @@ export default function ClientWorkspace() {
   if (error) return <div className="content"><Alert type="error">{error}</Alert><Button onClick={load}>Повторить</Button></div>;
   if (!data) return <div className="content"><Skeleton rows={5} /></div>;
   if (screen === "need") return <NeedStep products={data.products} onBack={() => setScreen("dashboard")} onContinue={(need, product) => { setSelection({ need, product }); setEditing(null); setScreen("editor"); }} />;
-  if (screen === "editor") { const product = data.products.find((item) => item.code === (editing?.product_code || selection?.product.code)); return <Editor application={editing} product={product} need={selection?.need} company={data.company} onClose={() => setScreen("dashboard")} onSaved={(saved) => setData({ ...data, applications: [saved, ...data.applications.filter((item) => item.id !== saved.id)] })} />; }
+  if (screen === "editor") { const product = data.products.find((item) => item.code === (editing?.product_code || selection?.product.code)); return <Editor application={editing} product={product} need={selection?.need} company={data.company} onClose={() => setScreen("dashboard")} onSaved={(saved) => setData({ ...data, applications: [saved, ...data.applications.filter((item) => item.id !== saved.id)] })} onDeleted={(id) => { setData({ ...data, applications: data.applications.filter((item) => item.id !== id) }); setEditing(null); setScreen("dashboard"); }} />; }
   return <Dashboard company={data.company} applications={data.applications} onNew={() => { setSelection(null); setScreen("need"); }} onOpen={(item) => { setEditing(item); setSelection(null); setScreen("editor"); }} />;
 }

@@ -72,8 +72,7 @@ export const api = {
     method: "PATCH",
     body: JSON.stringify(data),
   }),
-  // These routes are part of issue #5. Keeping them isolated here lets the
-  // employee UI integrate without inventing fallback data or fake decisions.
+  deleteApplication: (id) => request(`/applications/${id}`, { method: "DELETE" }),
   submitApplication: (id) => request(`/applications/${id}/submit`, { method: "POST" }),
   applicationEvents: (id) => request(`/applications/${id}/events`),
   bankApplications: (status = "") => request(`/bank/applications${status ? `?status=${status}` : ""}`),
