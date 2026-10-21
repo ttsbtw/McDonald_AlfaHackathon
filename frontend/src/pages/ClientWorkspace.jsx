@@ -122,13 +122,18 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
   const [notice, setNotice] = useState("");
   const [noticeType, setNoticeType] = useState("info");
   const [busy, setBusy] = useState(false);
+  const status = saved?.status;
+  const readOnly = ["SUBMITTED", "UNDER_REVIEW", "APPROVED", "REJECTED"].includes(status);
+  const finalDecision = ["APPROVED", "REJECTED"].includes(status);
 
   const set = (field) => (event) => {
+    if (readOnly) return;
     const next = { ...form, [field]: event.target.value };
     setForm(next); onFormChange(next);
   };
   async function save(event) {
-    event?.preventDefault(); setBusy(true); setNotice(""); setErrors({});
+    event?.preventDefault(); if (readOnly) return;
+    setBusy(true); setNotice(""); setErrors({});
     try {
       const payload = draftPayload(form);
       const result = saved ? await api.updateApplication(saved.id, { revision: saved.revision, ...payload }) : await api.createApplication(payload);
@@ -139,6 +144,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
     } finally { setBusy(false); }
   }
   async function submit() {
+    if (readOnly) return;
     const nextErrors = validateApplication(form); setErrors(nextErrors); setNotice("");
     if (Object.keys(nextErrors).length) return;
     setBusy(true);
@@ -165,15 +171,15 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
     } finally { setBusy(false); }
   }
 
-  return <div className="content content--form"><button className="back-link" onClick={onClose}>← К заявкам</button><div className="page-heading"><div><span className="eyebrow eyebrow--red">Шаг 2 из 2</span><h1>{saved ? "Заявка" : "Расскажите о бизнесе"}</h1><p>Известные банку сведения уже заполнены. Добавьте только показатели для оценки.</p></div><span className="big-number">02</span></div>
+  return <div className="content content--form"><button className="back-link" onClick={onClose}>← К заявкам</button><div className="page-heading"><div><span className="eyebrow eyebrow--red">Шаг 2 из 2</span><h1>{saved ? "Заявка" : "Расскажите о бизнесе"}</h1>{saved && <StatusBadge status={status} />}<p>{readOnly ? (status === "APPROVED" ? "Заявка одобрена. Анкета доступна только для просмотра." : status === "REJECTED" ? "По заявке принято решение об отказе. Анкета доступна только для просмотра." : "Заявка уже отправлена и ожидает решения. Изменения пока недоступны.") : "Известные банку сведения уже заполнены. Добавьте только показатели для оценки."}</p></div><span className="big-number">02</span></div>
     {notice && <Alert type={noticeType}>{notice}</Alert>}
     <form className="application-layout" onSubmit={save}>
       <div className="application-main">
         <section className="panel form-section"><div className="form-section__heading"><span>01</span><div><h2>Компания</h2><p>Сведения действующего клиента</p></div></div><div className="company-card"><b>{company.name}</b><span>{company.legal_form} · ИНН {company.inn}</span><small>Работает с {new Date(company.registration_date).toLocaleDateString("ru-RU")}</small></div></section>
-        <section className="panel form-section"><div className="form-section__heading"><span>02</span><div><h2>Параметры кредита</h2><p>Можно изменить до отправки</p></div></div><Field label="Продукт" error={errors.product_code}><input value={product?.name || form.product_code} disabled /></Field><div className="form-row"><Field label="Сумма" error={errors.requested_amount}><div className="input-suffix"><input inputMode="decimal" value={form.requested_amount ?? ""} onChange={set("requested_amount")} /><span>₽</span></div></Field><Field label="Срок" error={errors.term_months}><div className="input-suffix"><input inputMode="numeric" value={form.term_months ?? ""} onChange={set("term_months")} /><span>мес.</span></div></Field></div><Field label="Цель" error={errors.purpose}><textarea rows="3" maxLength="200" value={form.purpose ?? ""} onChange={set("purpose")} /></Field></section>
-        <section className="panel form-section"><div className="form-section__heading"><span>03</span><div><h2>Финансовые показатели</h2><p>Средние значения за последние 12 завершённых месяцев</p></div></div><div className="form-row"><Field label="Выручка в месяц" error={errors.average_monthly_revenue}><div className="input-suffix"><input inputMode="decimal" value={form.average_monthly_revenue ?? ""} onChange={set("average_monthly_revenue")} /><span>₽</span></div></Field><Field label="Операционные расходы" hint="Без платежей по кредитам" error={errors.average_monthly_operating_expenses}><div className="input-suffix"><input inputMode="decimal" value={form.average_monthly_operating_expenses ?? ""} onChange={set("average_monthly_operating_expenses")} /><span>₽</span></div></Field></div><Field label="Ежемесячные платежи по действующим кредитам" error={errors.existing_monthly_debt_payment}><div className="input-suffix"><input inputMode="decimal" value={form.existing_monthly_debt_payment ?? ""} onChange={set("existing_monthly_debt_payment")} /><span>₽</span></div></Field></section>
+        <section className="panel form-section"><div className="form-section__heading"><span>02</span><div><h2>Параметры кредита</h2><p>{readOnly ? "Параметры отправленной заявки" : "Можно изменить до отправки"}</p></div></div><Field label="Продукт" error={errors.product_code}><input value={product?.name || form.product_code} disabled /></Field><div className="form-row"><Field label="Сумма" error={errors.requested_amount}><div className="input-suffix"><input inputMode="decimal" value={form.requested_amount ?? ""} onChange={set("requested_amount")} disabled={readOnly} /><span>₽</span></div></Field><Field label="Срок" error={errors.term_months}><div className="input-suffix"><input inputMode="numeric" value={form.term_months ?? ""} onChange={set("term_months")} disabled={readOnly} /><span>мес.</span></div></Field></div><Field label="Цель" error={errors.purpose}><textarea rows="3" maxLength="200" value={form.purpose ?? ""} onChange={set("purpose")} disabled={readOnly} /></Field></section>
+        <section className="panel form-section"><div className="form-section__heading"><span>03</span><div><h2>Финансовые показатели</h2><p>Средние значения за последние 12 завершённых месяцев</p></div></div><div className="form-row"><Field label="Выручка в месяц" error={errors.average_monthly_revenue}><div className="input-suffix"><input inputMode="decimal" value={form.average_monthly_revenue ?? ""} onChange={set("average_monthly_revenue")} disabled={readOnly} /><span>₽</span></div></Field><Field label="Операционные расходы" hint="Без платежей по кредитам" error={errors.average_monthly_operating_expenses}><div className="input-suffix"><input inputMode="decimal" value={form.average_monthly_operating_expenses ?? ""} onChange={set("average_monthly_operating_expenses")} disabled={readOnly} /><span>₽</span></div></Field></div><Field label="Ежемесячные платежи по действующим кредитам" error={errors.existing_monthly_debt_payment}><div className="input-suffix"><input inputMode="decimal" value={form.existing_monthly_debt_payment ?? ""} onChange={set("existing_monthly_debt_payment")} disabled={readOnly} /><span>₽</span></div></Field></section>
       </div>
-      <aside className="application-aside"><div className="panel sticky-card"><span className="eyebrow">Перед отправкой</span><h3>Что произойдёт дальше</h3><ol><li>Проверим полноту анкеты</li><li>Выполним локальные проверки</li><li>Передадим сотруднику банка</li></ol><Button type="submit" variant="secondary" busy={busy}>Сохранить черновик</Button><Button type="button" onClick={submit} busy={busy}>Отправить заявку</Button>{saved?.status === "DRAFT" && <Button type="button" variant="ghost" busy={busy} onClick={deleteDraft}>Удалить черновик</Button>}<small>Отправляя заявку, вы подтверждаете корректность синтетических данных.</small></div></aside>
+      <aside className="application-aside"><div className="panel sticky-card">{readOnly ? <><span className="eyebrow">{finalDecision ? "Решение банка" : "Заявка отправлена"}</span><h3>{status === "APPROVED" ? "Кредит одобрен" : status === "REJECTED" ? "Заявка отклонена" : "Заявка на рассмотрении"}</h3><p className="muted">{finalDecision ? "Изменить или отправить эту заявку повторно нельзя." : "Пока заявка рассматривается, редактирование и повторная отправка недоступны."}</p></> : <><span className="eyebrow">Перед отправкой</span><h3>Что произойдёт дальше</h3><ol><li>Проверим полноту анкеты</li><li>Выполним локальные проверки</li><li>Передадим сотруднику банка</li></ol><Button type="submit" variant="secondary" busy={busy}>Сохранить черновик</Button><Button type="button" onClick={submit} busy={busy}>Отправить заявку</Button>{saved?.status === "DRAFT" && <Button type="button" variant="ghost" busy={busy} onClick={deleteDraft}>Удалить черновик</Button>}<small>Отправляя заявку, вы подтверждаете корректность синтетических данных.</small></>}</div></aside>
     </form>
   </div>;
 }
