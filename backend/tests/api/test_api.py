@@ -16,7 +16,6 @@ from sqlalchemy.orm.exc import StaleDataError
 from app.db import Base
 from app.main import create_app
 from app.models import Application, Company, CreditProduct, User
-from app.scoring import assess_application
 from app.seed import seed_demo
 
 pytestmark = pytest.mark.postgres
@@ -284,25 +283,105 @@ def test_migration_matches_models_and_roundtrip(database_url):
     engine.dispose()
 
 
-def test_complete_draft_can_be_mapped_to_existing_scoring_contract(client, application, headers):
+@pytest.mark.parametrize("product_code", ["working_capital", "equipment"])
+def test_submit_persists_explained_assessment_for_selected_product(client, application, headers, product_code):
     draft = create(client, headers, {
-        "product_code": "working_capital", "requested_amount": "300000.00", "term_months": 12,
+        "product_code": product_code, "requested_amount": "300000.00", "term_months": 12,
         "purpose": "Закупка", "average_monthly_revenue": "1000000.00",
         "average_monthly_operating_expenses": "600000.00", "existing_monthly_debt_payment": "50000.00",
     })
-    company = client.get("/api/v1/company", headers=headers).json()
-    data = {key: draft[key] for key in (
-        "product_code", "requested_amount", "term_months", "purpose", "average_monthly_revenue",
-        "average_monthly_operating_expenses", "existing_monthly_debt_payment",
-    )}
-    data.update(schema_version="1.0", application_id=draft["id"], application_revision=draft["revision"],
-                as_of_date="2026-10-21", legal_form=company["legal_form"], registration_date=company["registration_date"],
-                current_overdue_amount="0.00", max_overdue_days_12m=0)
-    checks = [{"source": source, "status": "PASS", "reason_code": "SYNTHETIC_TEST"}
-              for source in ("company_registry", "credit_history")]
-    with application.state.session_factory() as session:
-        policy = session.get(CreditProduct, draft["product_code"]).scoring_policy
-    result = assess_application(data, policy, checks)
-    assert result["score"] == 100
-    assert result["recommendation"] == "APPROVE"
-    assert result["application_revision"] == draft["revision"]
+
+    submitted = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers)
+    assert submitted.status_code == 200, submitted.text
+    assert submitted.json()["status"] == "UNDER_REVIEW"
+
+    employee_headers = auth_headers(client, "employee", EMPLOYEE_PASSWORD)
+    queue = client.get("/api/v1/bank/applications?status=UNDER_REVIEW", headers=employee_headers)
+    assert queue.status_code == 200
+    row = next(item for item in queue.json()["items"] if item["id"] == draft["id"])
+    assert row["product"]["code"] == product_code
+    assert row["score"] == 100
+    assert row["recommendation"] == "APPROVE"
+
+    assessments = client.get(f"/api/v1/bank/applications/{draft['id']}/assessments", headers=employee_headers)
+    assert assessments.status_code == 200
+    assert len(assessments.json()) == 1
+    assessment = assessments.json()[0]
+    assert assessment["application_revision"] == draft["revision"]
+    assert assessment["result"]["application_id"] == draft["id"]
+    assert assessment["result"]["application_revision"] == draft["revision"]
+    assert assessment["result"]["policy_version"] == row["product"]["policy_version"]
+    assert assessment["result"]["recommendation"] == "APPROVE"
+    assert assessment["result"]["hard_stops"] == []
+    assert assessment["input_snapshot"]["input_data"]["product_code"] == product_code
+    assert [item["source"] for item in assessment["input_snapshot"]["checks"]] == [
+        "company_registry", "credit_history",
+    ]
+
+    # A retry after a successful submit must not create a second assessment.
+    retried = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers)
+    assert retried.status_code == 200
+    assert client.get(f"/api/v1/bank/applications/{draft['id']}/assessments",
+                      headers=employee_headers).json() == assessments.json()
+
+
+@pytest.mark.parametrize(("expenses", "existing_debt", "expected_score", "recommendation"), [
+    ("600000.00", "50000.00", 100, "APPROVE"),
+    ("900000.00", "12000.00", 73, "REVIEW"),
+    ("900000.00", "100000.00", 48, "DECLINE"),
+])
+def test_submit_expected_approval_review_and_decline_outcomes(
+    client, headers, expenses, existing_debt, expected_score, recommendation,
+):
+    draft = create(client, headers, {
+        "product_code": "working_capital", "requested_amount": "300000.00", "term_months": 12,
+        "purpose": "Пополнение оборотных средств", "average_monthly_revenue": "1000000.00",
+        "average_monthly_operating_expenses": expenses, "existing_monthly_debt_payment": existing_debt,
+    })
+    submitted = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers)
+    assert submitted.status_code == 200, submitted.text
+
+    employee_headers = auth_headers(client, "employee", EMPLOYEE_PASSWORD)
+    assessments = client.get(f"/api/v1/bank/applications/{draft['id']}/assessments", headers=employee_headers)
+    result = assessments.json()[0]["result"]
+    assert result["score"] == expected_score
+    assert result["recommendation"] == recommendation
+    if recommendation == "APPROVE":
+        assert "SCORE_SUFFICIENT" in result["reason_codes"]
+    elif recommendation == "REVIEW":
+        assert "MANUAL_REVIEW" in result["reason_codes"]
+    else:
+        assert "EXCESSIVE_DEBT_BURDEN" in result["hard_stops"]
+
+
+def test_employee_can_request_information_and_client_resubmits_new_assessment(client, headers):
+    draft = create(client, headers, {
+        "product_code": "working_capital", "requested_amount": "300000.00", "term_months": 12,
+        "purpose": "Пополнение оборотных средств", "average_monthly_revenue": "1000000.00",
+        "average_monthly_operating_expenses": "900000.00", "existing_monthly_debt_payment": "12000.00",
+    })
+    submitted = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers)
+    assert submitted.status_code == 200
+
+    employee_headers = auth_headers(client, "employee", EMPLOYEE_PASSWORD)
+    bank_card = client.get(f"/api/v1/bank/applications/{draft['id']}", headers=employee_headers).json()
+    assert bank_card["recommendation"] == "REVIEW"
+    requested = client.post(f"/api/v1/bank/applications/{draft['id']}/request-info", headers=employee_headers,
+                            json={"comment": "Уточните среднемесячные расходы и сумму текущих кредитных платежей."})
+    assert requested.status_code == 200, requested.text
+    assert requested.json()["status"] == "NEEDS_INFO"
+
+    updated = client.patch(f"/api/v1/applications/{draft['id']}", headers=headers, json={
+        "revision": requested.json()["revision"],
+        "average_monthly_operating_expenses": "600000.00",
+        "existing_monthly_debt_payment": "50000.00",
+    })
+    assert updated.status_code == 200, updated.text
+    resubmitted = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers)
+    assert resubmitted.status_code == 200
+    assert resubmitted.json()["status"] == "UNDER_REVIEW"
+
+    assessments = client.get(f"/api/v1/bank/applications/{draft['id']}/assessments", headers=employee_headers)
+    assert [item["application_revision"] for item in assessments.json()] == [updated.json()["revision"], draft["revision"]]
+    assert assessments.json()[0]["result"]["score"] == 100
+    assert assessments.json()[0]["result"]["recommendation"] == "APPROVE"
