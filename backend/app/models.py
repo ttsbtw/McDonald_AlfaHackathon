@@ -152,3 +152,31 @@ class ApplicationEvent(Base):
     to_status: Mapped[str] = mapped_column(String(20))
     message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ReviewAction(Base):
+    """Employee action tied to the exact assessment used for the decision."""
+    __tablename__ = "review_actions"
+    __table_args__ = (
+        UniqueConstraint("application_id", "application_revision", name="uq_review_action_application_revision"),
+        CheckConstraint("action IN ('REQUEST_INFO', 'APPROVED', 'REJECTED')", name="ck_review_action_action"),
+        CheckConstraint(
+            "(action = 'APPROVED' AND approved_amount IS NOT NULL AND approved_term_months IS NOT NULL "
+            "AND annual_interest_rate IS NOT NULL) OR "
+            "(action <> 'APPROVED' AND approved_amount IS NULL AND approved_term_months IS NULL "
+            "AND annual_interest_rate IS NULL)",
+            name="ck_review_action_approval_terms",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    application_id: Mapped[UUID] = mapped_column(ForeignKey("applications.id", ondelete="CASCADE"))
+    assessment_id: Mapped[UUID] = mapped_column(ForeignKey("assessments.id"))
+    application_revision: Mapped[int] = mapped_column(Integer)
+    employee_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    action: Mapped[str] = mapped_column(String(20))
+    comment: Mapped[str] = mapped_column(Text)
+    approved_amount: Mapped[Decimal | None] = mapped_column(Numeric(15, 2))
+    approved_term_months: Mapped[int | None] = mapped_column(Integer)
+    annual_interest_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

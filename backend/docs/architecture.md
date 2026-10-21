@@ -23,6 +23,9 @@ erDiagram
     CREDIT_PRODUCTS o|--o{ APPLICATIONS : selected
     APPLICATIONS ||--o{ ASSESSMENTS : assessed_as
     APPLICATIONS ||--o{ APPLICATION_EVENTS : records
+    APPLICATIONS ||--o{ REVIEW_ACTIONS : reviewed_by
+    ASSESSMENTS ||--o{ REVIEW_ACTIONS : used_for
+    USERS ||--o{ REVIEW_ACTIONS : decides
     USERS ||--o{ APPLICATION_EVENTS : acts
     USERS {
         uuid id PK
@@ -84,6 +87,19 @@ erDiagram
         text message
         timestamptz created_at
     }
+    REVIEW_ACTIONS {
+        uuid id PK
+        uuid application_id FK
+        uuid assessment_id FK
+        uuid employee_id FK
+        int application_revision
+        string action
+        text comment
+        numeric approved_amount
+        int approved_term_months
+        numeric annual_interest_rate
+        timestamptz created_at
+    }
 ```
 
 Составной внешний ключ `(company_id, owner_id)` дополнительно запрещает связать
@@ -96,7 +112,9 @@ JSONB используется только для серверных услов
 Создание, редактирование и отправка атомарно записываются в историю событий.
 Повторная подача после `NEEDS_INFO` сохраняет новую оценку отдельно от старых.
 Очередь и карточку заявки читает только сотрудник банка; незавершённые черновики
-сотруднику не видны. Решения пока не реализованы.
+сотруднику не видны. Сотрудник может запросить уточнение, одобрить или отклонить
+заявку только по актуальной оценке. Событие перехода, комментарий, оценка и
+итоговые условия одобрения сохраняются одной транзакцией.
 
 Модуль `app.scoring` — отдельная чистая функция. При отправке backend передаёт
 ему анкету, сведения компании и результаты локальных симуляторов. Каждая оценка

@@ -111,7 +111,10 @@ class DraftPage(APIModel):
 class ApplicationEventOut(APIModel):
     id: UUID
     application_revision: int
-    event_type: Literal["DRAFT_CREATED", "DRAFT_UPDATED", "SUBMITTED", "RESUBMITTED"]
+    event_type: Literal[
+        "DRAFT_CREATED", "DRAFT_UPDATED", "SUBMITTED", "RESUBMITTED",
+        "INFO_REQUESTED", "APPROVED", "REJECTED",
+    ]
     from_status: Literal["DRAFT", "SUBMITTED", "UNDER_REVIEW", "NEEDS_INFO", "APPROVED", "REJECTED"] | None
     to_status: Literal["DRAFT", "SUBMITTED", "UNDER_REVIEW", "NEEDS_INFO", "APPROVED", "REJECTED"]
     message: str | None
@@ -150,6 +153,15 @@ class AssessmentOut(APIModel):
     @classmethod
     def normalize_utc(cls, value):
         return value.astimezone(timezone.utc)
+
+
+class RequestInfoIn(APIModel):
+    comment: str = Field(min_length=1, max_length=1000)
+
+
+class DecisionIn(APIModel):
+    decision: Literal["APPROVED", "REJECTED"]
+    comment: str | None = Field(default=None, max_length=1000)
 
 
 class FieldError(APIModel):

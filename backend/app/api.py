@@ -4,11 +4,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import and_, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import StaleDataError
 
 from .auth import BankEmployee, Client, CurrentUser, DB, create_token, dummy_hash, password_hash
 from .errors import APIError
-from .models import Application, ApplicationEvent, Assessment, Company, CreditProduct, User, utc_now
+from .models import Application, ApplicationEvent, Assessment, Company, CreditProduct, ReviewAction, User, utc_now
 from .scoring import assess_application
 from .scoring.contracts import PolicyValidationError
 from .schemas import (
@@ -17,12 +18,14 @@ from .schemas import (
     BankApplicationOut,
     BankApplicationPage,
     CompanyOut,
+    DecisionIn,
     DraftCreate,
     DraftOut,
     DraftPage,
     DraftUpdate,
     ErrorResponse,
     ProductOut,
+    RequestInfoIn,
     TokenOut,
     UserOut,
 )
@@ -211,6 +214,103 @@ def bank_assessments(application_id: UUID, db: DB, user: BankEmployee):
         .where(Assessment.application_id == application_id)
         .order_by(Assessment.application_revision.desc())
     ).all()
+
+
+def current_assessment(db, item):
+    assessment = db.scalar(
+        select(Assessment)
+        .where(Assessment.application_id == item.id)
+        .order_by(Assessment.application_revision.desc())
+        .limit(1)
+    )
+    if assessment is None:
+        raise APIError(409, "ASSESSMENT_REQUIRED", "Для заявки нет сохранённой оценки.")
+    if assessment.application_revision + 1 != item.revision:
+        raise APIError(409, "ASSESSMENT_STALE", "Оценка устарела. Клиент должен повторно отправить актуальную редакцию.")
+    return assessment
+
+
+def save_review_action(db, item, employee, assessment, action, message, target_status, **terms):
+    previous_status = item.status
+    db.add(ReviewAction(
+        application_id=item.id,
+        assessment_id=assessment.id,
+        application_revision=assessment.application_revision,
+        employee_id=employee.id,
+        action=action,
+        comment=message,
+        **terms,
+    ))
+    item.status = target_status
+    item.updated_at = utc_now()
+    try:
+        db.flush()
+        db.add(ApplicationEvent(
+            application_id=item.id,
+            actor_id=employee.id,
+            application_revision=item.revision,
+            event_type="INFO_REQUESTED" if action == "REQUEST_INFO" else action,
+            from_status=previous_status,
+            to_status=target_status,
+            message=message,
+        ))
+        db.commit()
+    except (StaleDataError, IntegrityError):
+        db.rollback()
+        raise APIError(409, "REVIEW_CONFLICT", "Заявку уже изменил другой сотрудник. Обновите карточку.") from None
+    return item
+
+
+@router.post("/bank/applications/{application_id}/request-info", response_model=DraftOut, tags=["Рабочее место сотрудника"])
+def request_application_info(application_id: UUID, payload: RequestInfoIn, db: DB, user: BankEmployee):
+    item = db.get(Application, application_id)
+    if item is None:
+        raise APIError(404, "APPLICATION_NOT_FOUND", "Заявка не найдена.")
+    if item.status != "UNDER_REVIEW":
+        raise APIError(409, "APPLICATION_NOT_REVIEWABLE", "Уточнение можно запросить только по заявке на рассмотрении.")
+    assessment = current_assessment(db, item)
+    return save_review_action(
+        db, item, user, assessment, "REQUEST_INFO", payload.comment, "NEEDS_INFO",
+    )
+
+
+@router.post("/bank/applications/{application_id}/decision", response_model=DraftOut, tags=["Рабочее место сотрудника"])
+def decide_application(application_id: UUID, payload: DecisionIn, db: DB, user: BankEmployee):
+    item = db.get(Application, application_id)
+    if item is None:
+        raise APIError(404, "APPLICATION_NOT_FOUND", "Заявка не найдена.")
+    if item.status != "UNDER_REVIEW":
+        raise APIError(409, "APPLICATION_NOT_REVIEWABLE", "Решение можно принять только по заявке на рассмотрении.")
+    assessment = current_assessment(db, item)
+    result = assessment.result
+
+    if payload.decision == "REJECTED":
+        if not payload.comment:
+            raise APIError(422, "DECISION_REASON_REQUIRED", "Укажите понятную причину отказа.", fields=[{
+                "field": "comment", "code": "REQUIRED", "message": "Для отказа укажите причину.",
+            }])
+        message = payload.comment
+        terms = {}
+    else:
+        if result.get("assessment_status") != "COMPLETED" or result.get("missing_fields"):
+            raise APIError(409, "ASSESSMENT_INCOMPLETE", "Нельзя одобрить заявку без полной оценки и проверок.")
+        if result.get("hard_stops"):
+            raise APIError(409, "ASSESSMENT_HARD_STOP", "Нельзя одобрить заявку с обязательным ограничением.")
+        product = db.get(CreditProduct, item.product_code)
+        if product is None:
+            raise APIError(409, "PRODUCT_UNAVAILABLE", "Не удалось получить условия продукта.")
+        amount = item.requested_amount
+        term = item.term_months
+        rate = product.annual_interest_rate
+        conditions = (
+            f"Условия демо-продукта: {amount:.2f} руб., {term} мес., "
+            f"расчётная ставка {rate:.2f}% годовых."
+        )
+        message = f"{payload.comment.strip()}\n{conditions}" if payload.comment else conditions
+        terms = {"approved_amount": amount, "approved_term_months": term, "annual_interest_rate": rate}
+    return save_review_action(
+        db, item, user, assessment, payload.decision, message, payload.decision, **terms,
+    )
 
 
 @router.patch("/applications/{application_id}", response_model=DraftOut, tags=["Черновики"])
