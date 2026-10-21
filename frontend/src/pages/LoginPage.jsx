@@ -40,7 +40,8 @@ export default function LoginPage({ onLogin }) {
         <Field label="Пароль"><input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required /></Field>
         <Button type="submit" busy={busy}>Продолжить</Button>
         <div className="demo-switch">
-          <button type="button" onClick={() => { setUsername("client1"); setPassword("Client-one-demo-2026!"); }}>Клиент</button>
+          <button type="button" onClick={() => { setUsername("client1"); setPassword("Client-one-demo-2026!"); }}>1-й клиент</button>
+          <button type="button" onClick={() => { setUsername("client2"); setPassword("Client-two-demo-2026!"); }}>2-й клиент</button>
           <button type="button" onClick={() => { setUsername("employee"); setPassword("Employee-demo-2026!"); }}>Сотрудник</button>
         </div>
         <small>Только синтетические данные. Регистрация не требуется.</small>

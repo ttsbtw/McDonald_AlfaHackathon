@@ -71,7 +71,7 @@ a { color: inherit; }
 .login-card h2 { margin: 0; font-size: 40px; }.login-card p { margin-bottom: 5px; line-height: 1.5; }
 .login-card > .button { width: 100%; margin-top: 4px; }
 .login-card small { text-align: center; color: var(--muted); }
-.demo-switch { padding: 5px; display: grid; grid-template-columns: 1fr 1fr; gap: 5px; border-radius: 12px; background: #f0f0ed; }
+.demo-switch { padding: 5px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; border-radius: 12px; background: #f0f0ed; }
 .demo-switch button { padding: 9px; border: 0; border-radius: 9px; background: transparent; font-size: 12px; font-weight: 800; }
 .demo-switch button:hover { background: #fff; }
 
