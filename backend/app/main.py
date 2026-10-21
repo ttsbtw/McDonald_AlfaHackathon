@@ -21,15 +21,15 @@ def create_app(settings=None):
         engine.dispose()
 
     app = FastAPI(
-        title="Умный кредитный кабинет — API заявок", version="0.4.0",
-        description="Вход клиентов и сотрудников, каталог, заявки, оценки и решения по заявкам.",
+        title="Умный кредитный кабинет — API заявок", version="0.5.0",
+        description="Вход клиентов и сотрудников, каталог, заявки, оценки, решения и история рассмотрения.",
         lifespan=lifespan,
     )
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
-                       allow_methods=["GET", "POST", "PATCH"],
+                       allow_methods=["GET", "POST", "PATCH", "DELETE"],
                        allow_headers=["Authorization", "Content-Type"])
     register_errors(app)
     app.include_router(router)

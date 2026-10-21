@@ -131,6 +131,20 @@ def get_draft(application_id: UUID, db: DB, user: Client):
     return own_application(db, user, application_id)
 
 
+@router.delete("/applications/{application_id}", status_code=204, response_class=Response, tags=["Черновики"])
+def delete_draft(application_id: UUID, db: DB, user: Client):
+    item = own_application(db, user, application_id)
+    if item.status != "DRAFT":
+        raise APIError(409, "APPLICATION_NOT_DELETABLE", "Удалить можно только черновик со статусом DRAFT.")
+    db.delete(item)
+    try:
+        db.commit()
+    except StaleDataError:
+        db.rollback()
+        raise APIError(409, "REVISION_CONFLICT", "Черновик изменён. Обновите список заявок.") from None
+    return Response(status_code=204)
+
+
 @router.get("/applications/{application_id}/events", response_model=list[ApplicationEventOut], tags=["Заявки"])
 def application_events(application_id: UUID, db: DB, user: Client):
     own_application(db, user, application_id)
