@@ -280,7 +280,7 @@ def test_migration_matches_models_and_roundtrip(database_url):
     command.upgrade(config, "head")
     command.upgrade(config, "head")
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0002_assessments"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0003_application_events"
     engine.dispose()
 
 

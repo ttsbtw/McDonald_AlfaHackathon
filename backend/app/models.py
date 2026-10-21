@@ -126,3 +126,29 @@ class Assessment(Base):
     input_snapshot: Mapped[dict] = mapped_column(JSONB)
     result: Mapped[dict] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ApplicationEvent(Base):
+    """Append-only audit trail of application edits and state transitions."""
+    __tablename__ = "application_events"
+    __table_args__ = (
+        Index("ix_application_events_application_created", "application_id", "created_at", "id"),
+        CheckConstraint(
+            "from_status IS NULL OR from_status IN ('DRAFT', 'SUBMITTED', 'UNDER_REVIEW', 'NEEDS_INFO', 'APPROVED', 'REJECTED')",
+            name="ck_application_event_from_status",
+        ),
+        CheckConstraint(
+            "to_status IN ('DRAFT', 'SUBMITTED', 'UNDER_REVIEW', 'NEEDS_INFO', 'APPROVED', 'REJECTED')",
+            name="ck_application_event_to_status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    application_id: Mapped[UUID] = mapped_column(ForeignKey("applications.id", ondelete="CASCADE"))
+    actor_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    application_revision: Mapped[int] = mapped_column(Integer)
+    event_type: Mapped[str] = mapped_column(String(32))
+    from_status: Mapped[str | None] = mapped_column(String(20))
+    to_status: Mapped[str] = mapped_column(String(20))
+    message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

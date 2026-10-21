@@ -108,6 +108,21 @@ class DraftPage(APIModel):
     offset: int
 
 
+class ApplicationEventOut(APIModel):
+    id: UUID
+    application_revision: int
+    event_type: Literal["DRAFT_CREATED", "DRAFT_UPDATED", "SUBMITTED", "RESUBMITTED"]
+    from_status: Literal["DRAFT", "SUBMITTED", "UNDER_REVIEW", "NEEDS_INFO", "APPROVED", "REJECTED"] | None
+    to_status: Literal["DRAFT", "SUBMITTED", "UNDER_REVIEW", "NEEDS_INFO", "APPROVED", "REJECTED"]
+    message: str | None
+    created_at: datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def normalize_utc(cls, value):
+        return value.astimezone(timezone.utc)
+
+
 class FieldError(APIModel):
     field: str
     code: str

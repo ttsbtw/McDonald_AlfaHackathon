@@ -8,10 +8,11 @@ from sqlalchemy.orm.exc import StaleDataError
 
 from .auth import DB, Client, CurrentUser, create_token, dummy_hash, password_hash
 from .errors import APIError
-from .models import Application, Assessment, Company, CreditProduct, User, utc_now
+from .models import Application, ApplicationEvent, Assessment, Company, CreditProduct, User, utc_now
 from .scoring import assess_application
 from .scoring.contracts import PolicyValidationError
 from .schemas import (
+    ApplicationEventOut,
     CompanyOut,
     DraftCreate,
     DraftOut,
@@ -98,6 +99,11 @@ def create_draft(payload: DraftCreate, db: DB, user: Client, response: Response)
     validate_product(db, payload.product_code)
     item = Application(owner_id=user.id, company_id=company.id, **payload.model_dump())
     db.add(item)
+    db.flush()
+    db.add(ApplicationEvent(
+        application_id=item.id, actor_id=user.id, application_revision=item.revision,
+        event_type="DRAFT_CREATED", from_status=None, to_status="DRAFT",
+    ))
     db.commit()
     response.headers["Location"] = f"/api/v1/applications/{item.id}"
     return item
@@ -119,6 +125,16 @@ def get_draft(application_id: UUID, db: DB, user: Client):
     return own_application(db, user, application_id)
 
 
+@router.get("/applications/{application_id}/events", response_model=list[ApplicationEventOut], tags=["Заявки"])
+def application_events(application_id: UUID, db: DB, user: Client):
+    own_application(db, user, application_id)
+    return db.scalars(
+        select(ApplicationEvent)
+        .where(ApplicationEvent.application_id == application_id)
+        .order_by(ApplicationEvent.created_at, ApplicationEvent.id)
+    ).all()
+
+
 @router.patch("/applications/{application_id}", response_model=DraftOut, tags=["Черновики"])
 def update_draft(application_id: UUID, payload: DraftUpdate, db: DB, user: Client):
     item = own_application(db, user, application_id)
@@ -129,11 +145,18 @@ def update_draft(application_id: UUID, payload: DraftUpdate, db: DB, user: Clien
     changes = payload.model_dump(exclude_unset=True, exclude={"revision"})
     if "product_code" in changes:
         validate_product(db, changes["product_code"])
+    old_status = item.status
     for field, value in changes.items():
         setattr(item, field, value)
     if changes:
         item.updated_at = utc_now()
     try:
+        if changes:
+            db.flush()
+            db.add(ApplicationEvent(
+                application_id=item.id, actor_id=user.id, application_revision=item.revision,
+                event_type="DRAFT_UPDATED", from_status=old_status, to_status=old_status,
+            ))
         db.commit()
     except StaleDataError:
         db.rollback()
@@ -188,6 +211,7 @@ def submit_application(application_id: UUID, db: DB, user: Client):
     except PolicyValidationError:
         raise APIError(503, "SCORING_POLICY_INVALID", "Правила оценки продукта временно недоступны.") from None
 
+    previous_status = item.status
     assessment = Assessment(
         application_id=item.id, application_revision=item.revision,
         input_snapshot=result["input_snapshot"] or {"input_data": input_data, "checks": checks},
@@ -197,6 +221,12 @@ def submit_application(application_id: UUID, db: DB, user: Client):
     item.status = "UNDER_REVIEW"
     item.updated_at = utc_now()
     try:
+        db.flush()
+        db.add(ApplicationEvent(
+            application_id=item.id, actor_id=user.id, application_revision=item.revision,
+            event_type="RESUBMITTED" if previous_status == "NEEDS_INFO" else "SUBMITTED",
+            from_status=previous_status, to_status="UNDER_REVIEW",
+        ))
         db.commit()
     except StaleDataError:
         db.rollback()

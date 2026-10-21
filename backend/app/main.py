@@ -43,7 +43,7 @@ def create_app(settings=None):
         try:
             with engine.connect() as connection:
                 version = connection.scalar(text("SELECT version_num FROM alembic_version"))
-                if version != "0002_assessments":
+                if version != "0003_application_events":
                     raise APIError(503, "MIGRATIONS_REQUIRED", "Требуется применить миграции.")
         except SQLAlchemyError:
             raise APIError(503, "DATABASE_NOT_READY", "База данных ещё не готова.") from None
