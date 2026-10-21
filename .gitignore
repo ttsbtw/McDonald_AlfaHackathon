@@ -1,4 +1,6 @@
 .DS_Store
 agents/
 case.pdf
+frontend/node_modules/
+frontend/dist/
 .env
