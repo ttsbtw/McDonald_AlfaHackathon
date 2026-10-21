@@ -4,16 +4,17 @@ import { Alert, Button, EmptyState, Field, Skeleton, StatusBadge } from "../comp
 
 const filters = ["", "UNDER_REVIEW", "NEEDS_INFO", "APPROVED", "REJECTED"];
 
-export default function EmployeeWorkspace() {
-  const [filter, setFilter] = useState(""); const [items, setItems] = useState(null); const [selected, setSelected] = useState(null); const [unavailable, setUnavailable] = useState(false); const [error, setError] = useState("");
+export default function EmployeeWorkspace({ pathname, navigate }) {
+  const [filter, setFilter] = useState(""); const [items, setItems] = useState(null); const [unavailable, setUnavailable] = useState(false); const [error, setError] = useState("");
   async function load() { setError(""); try { const result = await api.bankApplications(filter); setItems(result.items || result); setUnavailable(false); } catch (err) { if (err.status === 404 || err.status === 405) { setUnavailable(true); setItems([]); } else setError(err.message); } }
   useEffect(() => { load(); }, [filter]);
-  if (selected) return <ApplicationReview id={selected} onBack={() => { setSelected(null); load(); }} unavailable={unavailable} />;
+  const applicationMatch = pathname.match(/^\/employee\/applications\/([^/]+)$/);
+  if (applicationMatch) return <ApplicationReview id={applicationMatch[1]} onBack={() => { navigate("/employee/queue", { replace: true }); load(); }} unavailable={unavailable} />;
   return <div className="content"><div className="employee-heading"><div><span className="eyebrow eyebrow--red">Рабочее место сотрудника</span><h1>Очередь заявок</h1><p>Рассмотрение, скоринг и дальнейшее действие — в одной карточке.</p></div><div className="employee-metric"><span>В работе</span><b>{items?.filter((item) => item.status === "UNDER_REVIEW").length || 0}</b></div></div>
     {unavailable && <Alert title="Backend обработки ещё не подключён">Интерфейс готов к маршрутам задачи №5. Когда появится `/api/v1/bank/applications`, очередь загрузится автоматически.</Alert>}
     {error && <Alert type="error">{error}</Alert>}
     <div className="filters">{filters.map((status) => <button key={status || "all"} className={filter === status ? "is-active" : ""} onClick={() => setFilter(status)}>{status ? <StatusBadge status={status} /> : "Все"}</button>)}</div>
-    {items === null ? <Skeleton rows={5} /> : items.length ? <div className="bank-table"><div className="bank-table__head"><span>Клиент и цель</span><span>Сумма</span><span>Риск</span><span>Статус</span><span /></div>{items.map((item) => <button key={item.id} onClick={() => setSelected(item.id)}><span><b>{item.company?.name || item.company_name || "Компания"}</b><small>{item.purpose || "Цель не указана"}</small></span><strong>{item.requested_amount ? `${Number(item.requested_amount).toLocaleString("ru-RU")} ₽` : "—"}</strong><span className={`risk risk--${String(item.risk_level || "unknown").toLowerCase()}`}>{item.risk_level || "—"}</span><StatusBadge status={item.status} /><i>→</i></button>)}</div> : <EmptyState icon="✓" title={unavailable ? "Ожидаем API обработки" : "В очереди пусто"}>Новых заявок с выбранным статусом нет.</EmptyState>}
+    {items === null ? <Skeleton rows={5} /> : items.length ? <div className="bank-table"><div className="bank-table__head"><span>Клиент и цель</span><span>Сумма</span><span>Риск</span><span>Статус</span><span /></div>{items.map((item) => <button key={item.id} onClick={() => navigate(`/employee/applications/${item.id}`)}><span><b>{item.company?.name || item.company_name || "Компания"}</b><small>{item.purpose || "Цель не указана"}</small></span><strong>{item.requested_amount ? `${Number(item.requested_amount).toLocaleString("ru-RU")} ₽` : "—"}</strong><span className={`risk risk--${String(item.risk_level || "unknown").toLowerCase()}`}>{item.risk_level || "—"}</span><StatusBadge status={item.status} /><i>→</i></button>)}</div> : <EmptyState icon="✓" title={unavailable ? "Ожидаем API обработки" : "В очереди пусто"}>Новых заявок с выбранным статусом нет.</EmptyState>}
   </div>;
 }
 

@@ -13,11 +13,12 @@ function formatMoney(value) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(Number(value)) + " ₽";
 }
 
-function NeedStep({ products, initial, onBack, onContinue }) {
+function NeedStep({ products, initial, onChange, onBack, onContinue }) {
   const [need, setNeed] = useState(initial || { purposeCode: "", amount: "", termMonths: "" });
   const [errors, setErrors] = useState({});
   const [searched, setSearched] = useState(false);
   const matches = useMemo(() => products.map((product) => ({ product, fit: matchProduct(product, need) })), [products, need]);
+  function updateNeed(next) { setNeed(next); onChange?.(next); }
 
   function search(event) {
     event.preventDefault();
@@ -29,11 +30,11 @@ function NeedStep({ products, initial, onBack, onContinue }) {
     <form className="need-grid" onSubmit={search}>
       <section className="panel panel--form">
         <h2>Цель финансирования</h2>
-        <div className="purpose-grid">{PURPOSES.map((purpose) => <button type="button" key={purpose.value} className={`purpose-card ${need.purposeCode === purpose.value ? "is-selected" : ""}`} onClick={() => setNeed({ ...need, purposeCode: purpose.value })}><i /><strong>{purpose.label}</strong><span>{purpose.hint}</span></button>)}</div>
+        <div className="purpose-grid">{PURPOSES.map((purpose) => <button type="button" key={purpose.value} className={`purpose-card ${need.purposeCode === purpose.value ? "is-selected" : ""}`} onClick={() => updateNeed({ ...need, purposeCode: purpose.value })}><i /><strong>{purpose.label}</strong><span>{purpose.hint}</span></button>)}</div>
         {errors.purposeCode && <span className="form-error">{errors.purposeCode}</span>}
         <div className="form-row">
-          <Field label="Сумма" hint="В рублях" error={errors.amount}><div className="input-suffix"><input inputMode="decimal" placeholder="1 000 000" value={need.amount} onChange={(e) => setNeed({ ...need, amount: e.target.value })} /><span>₽</span></div></Field>
-          <Field label="Срок" hint="От 1 до 360 месяцев" error={errors.termMonths}><div className="input-suffix"><input inputMode="numeric" placeholder="12" value={need.termMonths} onChange={(e) => setNeed({ ...need, termMonths: e.target.value })} /><span>мес.</span></div></Field>
+          <Field label="Сумма" hint="В рублях" error={errors.amount}><div className="input-suffix"><input inputMode="decimal" placeholder="1 000 000" value={need.amount} onChange={(e) => updateNeed({ ...need, amount: e.target.value })} /><span>₽</span></div></Field>
+          <Field label="Срок" hint="От 1 до 360 месяцев" error={errors.termMonths}><div className="input-suffix"><input inputMode="numeric" placeholder="12" value={need.termMonths} onChange={(e) => updateNeed({ ...need, termMonths: e.target.value })} /><span>мес.</span></div></Field>
         </div>
         <Button type="submit">Подобрать продукты</Button>
       </section>
@@ -45,18 +46,21 @@ function NeedStep({ products, initial, onBack, onContinue }) {
   </div>;
 }
 
-function Editor({ application, product, company, need, onClose, onSaved, onDeleted }) {
-  const [form, setForm] = useState(() => application ? { ...emptyForm, ...application } : {
+function Editor({ application, product, company, need, formSnapshot, onFormChange, onClose, onSaved, onDeleted }) {
+  const [form, setForm] = useState(() => formSnapshot || (application ? { ...emptyForm, ...application } : {
     ...emptyForm, product_code: product?.code || "", requested_amount: need?.amount || "", term_months: need?.termMonths || "",
     purpose: PURPOSES.find((item) => item.value === need?.purposeCode)?.label || "",
-  });
+  }));
   const [saved, setSaved] = useState(application || null);
   const [errors, setErrors] = useState({});
   const [notice, setNotice] = useState("");
   const [noticeType, setNoticeType] = useState("info");
   const [busy, setBusy] = useState(false);
 
-  const set = (field) => (event) => setForm({ ...form, [field]: event.target.value });
+  const set = (field) => (event) => {
+    const next = { ...form, [field]: event.target.value };
+    setForm(next); onFormChange(next);
+  };
   async function save(event) {
     event?.preventDefault(); setBusy(true); setNotice(""); setErrors({});
     try {
@@ -114,13 +118,21 @@ function Dashboard({ company, applications, onNew, onOpen }) {
   </div>;
 }
 
-export default function ClientWorkspace() {
-  const [data, setData] = useState(null); const [error, setError] = useState(""); const [screen, setScreen] = useState("dashboard"); const [editing, setEditing] = useState(null); const [selection, setSelection] = useState(null);
+export default function ClientWorkspace({ pathname, navigate }) {
+  const [data, setData] = useState(null); const [error, setError] = useState(""); const [selection, setSelection] = useState(null); const [needSnapshot, setNeedSnapshot] = useState(null); const [formSnapshot, setFormSnapshot] = useState(null);
   async function load() { setError(""); try { const [company, products, page] = await Promise.all([api.company(), api.products(), api.applications()]); setData({ company, products, applications: page.items }); } catch (err) { setError(err.message); } }
   useEffect(() => { load(); }, []);
+  useEffect(() => { if (data && pathname === "/client/new/application" && !selection) navigate("/client/new", { replace: true }); }, [data, pathname, selection, navigate]);
   if (error) return <div className="content"><Alert type="error">{error}</Alert><Button onClick={load}>Повторить</Button></div>;
   if (!data) return <div className="content"><Skeleton rows={5} /></div>;
-  if (screen === "need") return <NeedStep products={data.products} onBack={() => setScreen("dashboard")} onContinue={(need, product) => { setSelection({ need, product }); setEditing(null); setScreen("editor"); }} />;
-  if (screen === "editor") { const product = data.products.find((item) => item.code === (editing?.product_code || selection?.product.code)); return <Editor application={editing} product={product} need={selection?.need} company={data.company} onClose={() => setScreen("dashboard")} onSaved={(saved) => setData({ ...data, applications: [saved, ...data.applications.filter((item) => item.id !== saved.id)] })} onDeleted={(id) => { setData({ ...data, applications: data.applications.filter((item) => item.id !== id) }); setEditing(null); setScreen("dashboard"); }} />; }
-  return <Dashboard company={data.company} applications={data.applications} onNew={() => { setSelection(null); setScreen("need"); }} onOpen={(item) => { setEditing(item); setSelection(null); setScreen("editor"); }} />;
+  if (pathname === "/client/new") return <NeedStep products={data.products} initial={needSnapshot} onChange={setNeedSnapshot} onBack={() => navigate("/client", { replace: true })} onContinue={(need, product) => { setNeedSnapshot(need); setSelection({ need, product }); navigate("/client/new/application"); }} />;
+  if (pathname === "/client/new/application" && !selection) return <NeedStep products={data.products} initial={needSnapshot} onChange={setNeedSnapshot} onBack={() => navigate("/client", { replace: true })} onContinue={(need, product) => { setNeedSnapshot(need); setSelection({ need, product }); navigate("/client/new/application"); }} />;
+  const applicationMatch = pathname.match(/^\/client\/applications\/([^/]+)$/);
+  const application = applicationMatch ? data.applications.find((item) => item.id === applicationMatch[1]) : null;
+  if (applicationMatch && !application) return <div className="content"><Alert type="error">Заявка не найдена в списке.</Alert><Button onClick={() => navigate("/client")}>К заявкам</Button></div>;
+  if (pathname === "/client/new/application" || applicationMatch) {
+    const product = data.products.find((item) => item.code === (application?.product_code || selection?.product.code));
+    return <Editor application={application} product={product} need={selection?.need} formSnapshot={formSnapshot} onFormChange={setFormSnapshot} company={data.company} onClose={() => navigate("/client", { replace: true })} onSaved={(saved) => setData({ ...data, applications: [saved, ...data.applications.filter((item) => item.id !== saved.id)] })} onDeleted={(id) => { setData({ ...data, applications: data.applications.filter((item) => item.id !== id) }); setFormSnapshot(null); navigate("/client", { replace: true }); }} />;
+  }
+  return <Dashboard company={data.company} applications={data.applications} onNew={() => { setSelection(null); setNeedSnapshot(null); setFormSnapshot(null); navigate("/client/new"); }} onOpen={(item) => { setFormSnapshot(null); navigate(`/client/applications/${item.id}`); }} />;
 }
