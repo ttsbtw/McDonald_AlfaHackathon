@@ -252,7 +252,7 @@ def save_review_action(db, item, employee, assessment, action, message, target_s
         application_revision=assessment.application_revision,
         employee_id=employee.id,
         action=action,
-        comment=message,
+        comment=message or "",
         **terms,
     ))
     item.status = target_status
@@ -299,11 +299,7 @@ def decide_application(application_id: UUID, payload: DecisionIn, db: DB, user: 
     result = assessment.result
 
     if payload.decision == "REJECTED":
-        if not payload.comment:
-            raise APIError(422, "DECISION_REASON_REQUIRED", "Укажите понятную причину отказа.", fields=[{
-                "field": "comment", "code": "REQUIRED", "message": "Для отказа укажите причину.",
-            }])
-        message = payload.comment
+        message = payload.comment.strip() if payload.comment and payload.comment.strip() else None
         terms = {}
     else:
         if result.get("assessment_status") != "COMPLETED" or result.get("missing_fields"):
@@ -320,7 +316,8 @@ def decide_application(application_id: UUID, payload: DecisionIn, db: DB, user: 
             f"Условия демо-продукта: {amount:.2f} руб., {term} мес., "
             f"расчётная ставка {rate:.2f}% годовых."
         )
-        message = f"{payload.comment.strip()}\n{conditions}" if payload.comment else conditions
+        approval_note = payload.comment.strip() if payload.comment and payload.comment.strip() else None
+        message = f"{approval_note}\n{conditions}" if approval_note else conditions
         terms = {"approved_amount": amount, "approved_term_months": term, "annual_interest_rate": rate}
     return save_review_action(
         db, item, user, assessment, payload.decision, message, payload.decision, **terms,
