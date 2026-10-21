@@ -1,10 +1,17 @@
 import { STATUS_LABELS } from "../domain/application.js";
+import { Button as CoreButton } from "@alfalab/core-components-button";
 
-export function Button({ children, variant = "primary", busy, ...props }) {
-  return <button className={`button button--${variant}`} disabled={busy || props.disabled} {...props}>
-    {busy ? <span className="button__loader" aria-hidden="true" /> : null}
-    {busy ? "Подождите…" : children}
-  </button>;
+export function Button({ children, variant = "primary", busy, disabled, className = "", ...props }) {
+  const views = { primary: "accent", secondary: "secondary", ghost: "text" };
+  return <CoreButton
+    className={`app-button app-button--${variant} ${className}`.trim()}
+    view={views[variant] || "accent"}
+    shape="rounded"
+    size={48}
+    loading={busy}
+    disabled={busy || disabled}
+    {...props}
+  >{children}</CoreButton>;
 }
 
 export function Alert({ type = "info", children, title }) {
