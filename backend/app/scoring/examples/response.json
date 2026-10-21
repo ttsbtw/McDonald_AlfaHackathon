@@ -1,0 +1,114 @@
+{
+  "schema_version": "1.0",
+  "scoring_version": "demo-scorecard-1.0",
+  "policy_version": "demo-working-capital-1.0",
+  "application_id": "00000000-0000-4000-8000-000000000001",
+  "application_revision": 1,
+  "as_of_date": "2026-10-20",
+  "assessment_status": "COMPLETED",
+  "score": 100,
+  "risk_level": "LOW",
+  "factors": [
+    {
+      "code": "BUSINESS_AGE",
+      "value": 48,
+      "points": 20,
+      "max_points": 20,
+      "explanation": "Полных месяцев работы: 48; вклад 20 из 20."
+    },
+    {
+      "code": "OPERATING_MARGIN",
+      "value": "0.4",
+      "points": 25,
+      "max_points": 25,
+      "explanation": "Доля выручки после операционных расходов; вклад 25 из 25. При нулевой выручке показатель не определён."
+    },
+    {
+      "code": "DEBT_BURDEN",
+      "value": "0.1959197",
+      "points": 35,
+      "max_points": 35,
+      "explanation": "Все кредитные платежи / доход после операционных расходов; вклад 35 из 35. При неположительном доходе показатель не определён."
+    },
+    {
+      "code": "PAYMENT_HISTORY",
+      "value": {
+        "current_overdue_amount": "0.00",
+        "max_overdue_days_12m": 0
+      },
+      "points": 20,
+      "max_points": 20,
+      "explanation": "Текущие просрочки и задержки за 12 месяцев; вклад 20 из 20."
+    }
+  ],
+  "features": {
+    "business_age_months": 48,
+    "monthly_operating_profit": "400000.00",
+    "operating_margin": "0.4",
+    "new_monthly_payment": "28367.88",
+    "total_monthly_debt_payment": "78367.88",
+    "debt_burden": "0.1959197"
+  },
+  "validation_errors": [],
+  "input_snapshot": {
+    "input_data": {
+      "schema_version": "1.0",
+      "application_id": "00000000-0000-4000-8000-000000000001",
+      "application_revision": 1,
+      "as_of_date": "2026-10-20",
+      "product_code": "working_capital",
+      "term_months": 12,
+      "purpose": "Пополнение оборотных средств",
+      "legal_form": "IP",
+      "registration_date": "2022-10-20",
+      "requested_amount": "300000.00",
+      "average_monthly_revenue": "1000000.00",
+      "average_monthly_operating_expenses": "600000.00",
+      "existing_monthly_debt_payment": "50000.00",
+      "current_overdue_amount": "0.00",
+      "max_overdue_days_12m": 0
+    },
+    "product_policy": {
+      "policy_version": "demo-working-capital-1.0",
+      "product_code": "working_capital",
+      "min_amount": "50000.00",
+      "max_amount": "5000000.00",
+      "min_term_months": 6,
+      "max_term_months": 60,
+      "annual_interest_rate": "24.00",
+      "min_business_age_months": 6,
+      "max_debt_burden": "0.70",
+      "max_overdue_days_12m": 30,
+      "approve_score": 75,
+      "review_score": 50,
+      "required_checks": [
+        "company_registry",
+        "credit_history"
+      ]
+    },
+    "checks": [
+      {
+        "source": "company_registry",
+        "status": "PASS",
+        "reason_code": "ACTIVE"
+      },
+      {
+        "source": "credit_history",
+        "status": "PASS",
+        "reason_code": "AVAILABLE"
+      }
+    ]
+  },
+  "recommendation": "APPROVE",
+  "hard_stops": [],
+  "reason_codes": [
+    "SCORE_SUFFICIENT"
+  ],
+  "reasons": [
+    {
+      "code": "SCORE_SUFFICIENT",
+      "message": "Балл достаточен и ограничения продукта выполнены; требуется итоговое решение сотрудника."
+    }
+  ],
+  "missing_fields": []
+}
