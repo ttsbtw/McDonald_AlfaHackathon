@@ -1,18 +1,21 @@
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm.exc import StaleDataError
 
-from .auth import DB, Client, CurrentUser, create_token, dummy_hash, password_hash
+from .auth import BankEmployee, Client, CurrentUser, DB, create_token, dummy_hash, password_hash
 from .errors import APIError
 from .models import Application, ApplicationEvent, Assessment, Company, CreditProduct, User, utc_now
 from .scoring import assess_application
 from .scoring.contracts import PolicyValidationError
 from .schemas import (
     ApplicationEventOut,
+    AssessmentOut,
+    BankApplicationOut,
+    BankApplicationPage,
     CompanyOut,
     DraftCreate,
     DraftOut,
@@ -132,6 +135,81 @@ def application_events(application_id: UUID, db: DB, user: Client):
         select(ApplicationEvent)
         .where(ApplicationEvent.application_id == application_id)
         .order_by(ApplicationEvent.created_at, ApplicationEvent.id)
+    ).all()
+
+
+def bank_application_query():
+    latest_revision = (
+        select(func.max(Assessment.application_revision))
+        .where(Assessment.application_id == Application.id)
+        .correlate(Application)
+        .scalar_subquery()
+    )
+    return (
+        select(Application, Company, User, CreditProduct, Assessment)
+        .join(Company, Company.id == Application.company_id)
+        .join(User, User.id == Application.owner_id)
+        .outerjoin(CreditProduct, CreditProduct.code == Application.product_code)
+        .outerjoin(Assessment, and_(
+            Assessment.application_id == Application.id,
+            Assessment.application_revision == latest_revision,
+        ))
+    )
+
+
+def bank_application_out(row):
+    item, company, client, product, assessment = row
+    result = assessment.result if assessment else {}
+    return BankApplicationOut(
+        **DraftOut.model_validate(item).model_dump(),
+        client=client,
+        company=company,
+        product=product,
+        risk_level=result.get("risk_level"),
+        score=result.get("score"),
+        recommendation=result.get("recommendation"),
+    )
+
+
+@router.get("/bank/applications", response_model=BankApplicationPage, tags=["Рабочее место сотрудника"])
+def bank_applications(
+    db: DB,
+    user: BankEmployee,
+    status: Annotated[Literal["SUBMITTED", "UNDER_REVIEW", "NEEDS_INFO", "APPROVED", "REJECTED"] | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    filters = [Application.status != "DRAFT"]
+    if status is not None:
+        filters.append(Application.status == status)
+    items = db.execute(
+        bank_application_query().where(*filters)
+        .order_by(Application.created_at, Application.id)
+        .limit(limit).offset(offset)
+    ).all()
+    total = db.scalar(select(func.count()).select_from(Application).where(*filters))
+    return {"items": [bank_application_out(row) for row in items], "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/bank/applications/{application_id}", response_model=BankApplicationOut, tags=["Рабочее место сотрудника"])
+def bank_application(application_id: UUID, db: DB, user: BankEmployee):
+    row = db.execute(bank_application_query().where(
+        Application.id == application_id, Application.status != "DRAFT",
+    )).one_or_none()
+    if row is None:
+        raise APIError(404, "APPLICATION_NOT_FOUND", "Заявка не найдена.")
+    return bank_application_out(row)
+
+
+@router.get("/bank/applications/{application_id}/assessments", response_model=list[AssessmentOut], tags=["Рабочее место сотрудника"])
+def bank_assessments(application_id: UUID, db: DB, user: BankEmployee):
+    item = db.get(Application, application_id)
+    if item is None or item.status == "DRAFT":
+        raise APIError(404, "APPLICATION_NOT_FOUND", "Заявка не найдена.")
+    return db.scalars(
+        select(Assessment)
+        .where(Assessment.application_id == application_id)
+        .order_by(Assessment.application_revision.desc())
     ).all()
 
 

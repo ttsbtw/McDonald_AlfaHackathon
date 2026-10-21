@@ -21,8 +21,8 @@ def create_app(settings=None):
         engine.dispose()
 
     app = FastAPI(
-        title="Умный кредитный кабинет — API заявок", version="0.2.0",
-        description="Вход действующих клиентов, каталог, черновики и автоматическая оценка при отправке заявки.",
+        title="Умный кредитный кабинет — API заявок", version="0.3.0",
+        description="Вход клиентов и сотрудников, каталог, заявки, оценки и очередь рассмотрения.",
         lifespan=lifespan,
     )
     app.state.settings = settings

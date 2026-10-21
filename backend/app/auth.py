@@ -63,3 +63,12 @@ def require_client(user: CurrentUser):
 
 
 Client = Annotated[User, Depends(require_client)]
+
+
+def require_bank_employee(user: CurrentUser):
+    if user.role != "BANK_EMPLOYEE":
+        raise APIError(403, "FORBIDDEN", "Действие доступно только сотруднику банка.")
+    return user
+
+
+BankEmployee = Annotated[User, Depends(require_bank_employee)]

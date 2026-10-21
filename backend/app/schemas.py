@@ -123,6 +123,35 @@ class ApplicationEventOut(APIModel):
         return value.astimezone(timezone.utc)
 
 
+class BankApplicationOut(DraftOut):
+    client: UserOut
+    company: CompanyOut
+    product: ProductOut | None
+    risk_level: Literal["LOW", "MEDIUM", "HIGH", "UNKNOWN"] | None
+    score: int | None
+    recommendation: Literal["APPROVE", "REVIEW", "DECLINE", "REQUEST_INFO"] | None
+
+
+class BankApplicationPage(APIModel):
+    items: list[BankApplicationOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class AssessmentOut(APIModel):
+    id: UUID
+    application_revision: int
+    input_snapshot: dict
+    result: dict
+    created_at: datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def normalize_utc(cls, value):
+        return value.astimezone(timezone.utc)
+
+
 class FieldError(APIModel):
     field: str
     code: str
