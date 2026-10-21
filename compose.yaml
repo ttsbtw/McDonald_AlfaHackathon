@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:16.13-bookworm
+    environment:
+      POSTGRES_DB: credit_cabinet
+      POSTGRES_USER: credit_cabinet
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://credit_cabinet:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/credit_cabinet
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      TOKEN_LIFETIME_MINUTES: 30
+      CORS_ORIGINS: '["http://localhost:5173"]'
+      SEED_DEMO: ${SEED_DEMO:-false}
+      DEMO_CLIENT_PASSWORD: ${DEMO_CLIENT_PASSWORD:-}
+      DEMO_SECOND_CLIENT_PASSWORD: ${DEMO_SECOND_CLIENT_PASSWORD:-}
+      DEMO_EMPLOYEE_PASSWORD: ${DEMO_EMPLOYEE_PASSWORD:-}
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
