@@ -889,7 +889,7 @@
         ],
         "responses": {
           "204": {
-            "description": "Draft deleted; no response body."
+            "description": "Successful Response"
           },
           "401": {
             "description": "Unauthorized",
@@ -1123,7 +1123,8 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/ApplicationEventOut"
-                  }
+                  },
+                  "title": "Response Application Events Api V1 Applications  Application Id  Events Get"
                 }
               }
             }
@@ -1444,7 +1445,8 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/AssessmentOut"
-                  }
+                  },
+                  "title": "Response Bank Assessments Api V1 Bank Applications  Application Id  Assessments Get"
                 }
               }
             }
@@ -2472,7 +2474,8 @@
           "message",
           "created_at"
         ],
-        "title": "ApplicationEventOut"
+        "title": "ApplicationEventOut",
+        "additionalProperties": false
       },
       "BankApplicationOut": {
         "properties": {
@@ -2625,7 +2628,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Risk Level"
           },
           "score": {
             "anyOf": [
@@ -2635,7 +2639,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Score"
           },
           "recommendation": {
             "anyOf": [
@@ -2651,7 +2656,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Recommendation"
           }
         },
         "additionalProperties": false,
@@ -2701,7 +2707,8 @@
           "limit",
           "offset"
         ],
-        "title": "BankApplicationPage"
+        "title": "BankApplicationPage",
+        "additionalProperties": false
       },
       "AssessmentOut": {
         "properties": {
@@ -2716,11 +2723,13 @@
           },
           "input_snapshot": {
             "type": "object",
-            "title": "Input Snapshot"
+            "title": "Input Snapshot",
+            "additionalProperties": true
           },
           "result": {
             "type": "object",
-            "title": "Result"
+            "title": "Result",
+            "additionalProperties": true
           },
           "created_at": {
             "type": "string",
@@ -2736,7 +2745,8 @@
           "result",
           "created_at"
         ],
-        "title": "AssessmentOut"
+        "title": "AssessmentOut",
+        "additionalProperties": false
       },
       "RequestInfoIn": {
         "properties": {
