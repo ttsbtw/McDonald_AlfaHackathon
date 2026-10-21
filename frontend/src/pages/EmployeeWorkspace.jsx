@@ -1,0 +1,25 @@
+import { useEffect, useState } from "react";
+import { api } from "../api/client.js";
+import { Alert, Button, EmptyState, Field, Skeleton, StatusBadge } from "../components/UI.jsx";
+
+const filters = ["", "UNDER_REVIEW", "NEEDS_INFO", "APPROVED", "REJECTED"];
+
+export default function EmployeeWorkspace() {
+  const [filter, setFilter] = useState(""); const [items, setItems] = useState(null); const [selected, setSelected] = useState(null); const [unavailable, setUnavailable] = useState(false); const [error, setError] = useState("");
+  async function load() { setError(""); try { const result = await api.bankApplications(filter); setItems(result.items || result); setUnavailable(false); } catch (err) { if (err.status === 404 || err.status === 405) { setUnavailable(true); setItems([]); } else setError(err.message); } }
+  useEffect(() => { load(); }, [filter]);
+  if (selected) return <ApplicationReview id={selected} onBack={() => { setSelected(null); load(); }} unavailable={unavailable} />;
+  return <div className="content"><div className="employee-heading"><div><span className="eyebrow eyebrow--red">Рабочее место сотрудника</span><h1>Очередь заявок</h1><p>Рассмотрение, скоринг и дальнейшее действие — в одной карточке.</p></div><div className="employee-metric"><span>В работе</span><b>{items?.filter((item) => item.status === "UNDER_REVIEW").length || 0}</b></div></div>
+    {unavailable && <Alert title="Backend обработки ещё не подключён">Интерфейс готов к маршрутам задачи №5. Когда появится `/api/v1/bank/applications`, очередь загрузится автоматически.</Alert>}
+    {error && <Alert type="error">{error}</Alert>}
+    <div className="filters">{filters.map((status) => <button key={status || "all"} className={filter === status ? "is-active" : ""} onClick={() => setFilter(status)}>{status ? <StatusBadge status={status} /> : "Все"}</button>)}</div>
+    {items === null ? <Skeleton rows={5} /> : items.length ? <div className="bank-table"><div className="bank-table__head"><span>Клиент и цель</span><span>Сумма</span><span>Риск</span><span>Статус</span><span /></div>{items.map((item) => <button key={item.id} onClick={() => setSelected(item.id)}><span><b>{item.company?.name || item.company_name || "Компания"}</b><small>{item.purpose || "Цель не указана"}</small></span><strong>{item.requested_amount ? `${Number(item.requested_amount).toLocaleString("ru-RU")} ₽` : "—"}</strong><span className={`risk risk--${String(item.risk_level || "unknown").toLowerCase()}`}>{item.risk_level || "—"}</span><StatusBadge status={item.status} /><i>→</i></button>)}</div> : <EmptyState icon="✓" title={unavailable ? "Ожидаем API обработки" : "В очереди пусто"}>Новых заявок с выбранным статусом нет.</EmptyState>}
+  </div>;
+}
+
+function ApplicationReview({ id, onBack, unavailable }) {
+  const [record, setRecord] = useState(null); const [error, setError] = useState(""); const [comment, setComment] = useState(""); const [busy, setBusy] = useState(false);
+  useEffect(() => { if (!unavailable) Promise.all([api.bankApplication(id), api.bankAssessments(id)]).then(([application, assessments]) => setRecord({ ...application, assessments })).catch((err) => setError(err.message)); }, [id, unavailable]);
+  async function action(type) { setBusy(true); setError(""); try { if (type === "info") await api.requestInfo(id, { comment }); else await api.decide(id, { decision: type === "approve" ? "APPROVED" : "REJECTED", comment }); onBack(); } catch (err) { setError(err.message); } finally { setBusy(false); } }
+  return <div className="content content--wide"><button className="back-link" onClick={onBack}>← К очереди</button>{error && <Alert type="error">{error}</Alert>}{!record ? <Skeleton rows={6} /> : <div className="review-layout"><main><div className="page-heading"><div><span className="eyebrow eyebrow--red">Заявка {String(id).slice(0, 8)}</span><h1>{record.company?.name || "Компания"}</h1><p>{record.purpose}</p></div><StatusBadge status={record.status} /></div><section className="panel"><h2>Параметры и финансы</h2><dl className="facts"><div><dt>Сумма</dt><dd>{record.requested_amount} ₽</dd></div><div><dt>Срок</dt><dd>{record.term_months} мес.</dd></div><div><dt>Выручка</dt><dd>{record.average_monthly_revenue} ₽/мес.</dd></div><div><dt>Расходы</dt><dd>{record.average_monthly_operating_expenses} ₽/мес.</dd></div></dl></section><section className="panel"><h2>Оценка системы</h2>{record.assessments?.length ? <pre>{JSON.stringify(record.assessments[0], null, 2)}</pre> : <p className="muted">Оценка пока не сформирована.</p>}</section></main><aside className="panel sticky-card"><span className="eyebrow">Решение</span><h3>Следующее действие</h3><Field label="Комментарий клиенту"><textarea rows="5" value={comment} onChange={(e) => setComment(e.target.value)} /></Field><Button busy={busy} onClick={() => action("approve")}>Одобрить</Button><Button busy={busy} variant="secondary" onClick={() => action("info")}>Запросить сведения</Button><Button busy={busy} variant="ghost" onClick={() => action("reject")}>Отказать</Button></aside></div>}</div>;
+}
