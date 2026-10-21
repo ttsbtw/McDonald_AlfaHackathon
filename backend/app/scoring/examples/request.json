@@ -1,0 +1,38 @@
+{
+  "input_data": {
+    "schema_version": "1.0",
+    "application_id": "00000000-0000-4000-8000-000000000001",
+    "application_revision": 1,
+    "as_of_date": "2026-10-20",
+    "product_code": "working_capital",
+    "requested_amount": "300000.00",
+    "term_months": 12,
+    "purpose": "Пополнение оборотных средств",
+    "legal_form": "IP",
+    "registration_date": "2022-10-20",
+    "average_monthly_revenue": "1000000.00",
+    "average_monthly_operating_expenses": "600000.00",
+    "existing_monthly_debt_payment": "50000.00",
+    "current_overdue_amount": "0.00",
+    "max_overdue_days_12m": 0
+  },
+  "product_policy": {
+    "policy_version": "demo-working-capital-1.0",
+    "product_code": "working_capital",
+    "min_amount": "50000.00",
+    "max_amount": "5000000.00",
+    "min_term_months": 6,
+    "max_term_months": 60,
+    "annual_interest_rate": "24.00",
+    "min_business_age_months": 6,
+    "max_debt_burden": "0.70",
+    "max_overdue_days_12m": 30,
+    "approve_score": 75,
+    "review_score": 50,
+    "required_checks": ["company_registry", "credit_history"]
+  },
+  "checks": [
+    {"source": "company_registry", "status": "PASS", "reason_code": "ACTIVE"},
+    {"source": "credit_history", "status": "PASS", "reason_code": "AVAILABLE"}
+  ]
+}

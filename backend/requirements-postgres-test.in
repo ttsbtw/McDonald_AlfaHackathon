@@ -1,0 +1,3 @@
+-r requirements-dev.in
+# Optional isolated PostgreSQL for local tests when Docker/PostgreSQL is unavailable.
+pgserver==0.1.4

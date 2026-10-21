@@ -1,0 +1,47 @@
+@base = http://localhost:8000
+@clientPassword = Client-one-demo-2026!
+@token = paste-access-token-here
+@applicationId = paste-application-id-here
+
+### 1. Login: copy access_token from the response into @token
+POST {{base}}/api/v1/auth/login
+Content-Type: application/x-www-form-urlencoded
+
+username=client1&password={{clientPassword}}
+
+### 2. Current user
+GET {{base}}/api/v1/auth/me
+Authorization: Bearer {{token}}
+
+### 3. Prefilled company
+GET {{base}}/api/v1/company
+Authorization: Bearer {{token}}
+
+### 4. Products
+GET {{base}}/api/v1/products
+Authorization: Bearer {{token}}
+
+### 5. Save a partial draft; copy id into @applicationId
+POST {{base}}/api/v1/applications
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"product_code":"working_capital","requested_amount":"300000.00","term_months":12,"purpose":"Закупка материалов"}
+
+### 6. Fill financial data; use the current revision returned by GET
+PATCH {{base}}/api/v1/applications/{{applicationId}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"revision":1,"average_monthly_revenue":"1000000.00","average_monthly_operating_expenses":"600000.00","existing_monthly_debt_payment":"50000.00"}
+
+### 7. Read the draft again after restarting backend
+GET {{base}}/api/v1/applications/{{applicationId}}
+Authorization: Bearer {{token}}
+
+### 8. Own applications only
+GET {{base}}/api/v1/applications?limit=20&offset=0
+Authorization: Bearer {{token}}
+
+### 9. Application and database readiness
+GET {{base}}/ready
