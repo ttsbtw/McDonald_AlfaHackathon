@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "../api/client.js";
 import { Alert, Button, EmptyState, Field, Skeleton, StatusBadge } from "../components/UI.jsx";
 import { PURPOSES, draftPayload, matchProduct, validateApplication, validateNeed } from "../domain/application.js";
+import { SliderInput } from "@alfalab/core-components-slider-input";
 
 const emptyForm = {
   product_code: "", requested_amount: "", term_months: "", purpose: "",
@@ -13,15 +14,42 @@ function formatMoney(value) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(Number(value)) + " ₽";
 }
 
+function formatCompactMoney(value) {
+  if (value >= 1_000_000) return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(value / 1_000_000)} млн ₽`;
+  return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(value / 1_000)} тыс. ₽`;
+}
+
+function formatInputNumber(value) {
+  if (value === "" || value === null || value === undefined) return "";
+  return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(Number(value));
+}
+
+function formatTerm(value) {
+  if (value < 12) return `${value} мес.`;
+  const years = Math.floor(value / 12);
+  const months = value % 12;
+  const yearsLabel = years === 1 ? "год" : years < 5 ? "года" : "лет";
+  return months ? `${years} ${yearsLabel} ${months} мес.` : `${years} ${yearsLabel}`;
+}
+
 function NeedStep({ products, initial, onChange, onBack, onContinue }) {
-  const [need, setNeed] = useState(initial || { purposeCode: "", amount: "", termMonths: "" });
+  const [need, setNeed] = useState(initial || { purposeCode: "", amount: "1000000", termMonths: "24" });
   const [errors, setErrors] = useState({});
   const [searched, setSearched] = useState(false);
+  const [focusedRange, setFocusedRange] = useState("");
   const matches = useMemo(() => products.map((product) => ({ product, fit: matchProduct(product, need) })), [products, need]);
+  const amountMin = products.length ? Math.min(...products.map((product) => Number(product.min_amount))) : 300_000;
+  const amountMax = products.length ? Math.max(...products.map((product) => Number(product.max_amount))) : 10_000_000;
+  const termMin = products.length ? Math.min(...products.map((product) => product.min_term_months)) : 6;
+  const termMax = products.length ? Math.max(...products.map((product) => product.max_term_months)) : 60;
+  const amountMid = Math.round((amountMin + amountMax) / 2 / 50_000) * 50_000;
+  const termMid = Math.round((termMin + termMax) / 2);
+  const sliderValue = (value, min, max) => Math.min(max, Math.max(min, Number(value) || min));
   function updateNeed(next) { setNeed(next); onChange?.(next); }
+  function updateRange(field, value) { updateNeed({ ...need, [field]: value === "" ? "" : String(value) }); }
 
   function search(event) {
-    event.preventDefault();
+    event?.preventDefault();
     const next = validateNeed(need); setErrors(next); setSearched(Object.keys(next).length === 0);
   }
   return <div className="content content--wide">
@@ -32,11 +60,49 @@ function NeedStep({ products, initial, onChange, onBack, onContinue }) {
         <h2>Цель финансирования</h2>
         <div className="purpose-grid">{PURPOSES.map((purpose) => <button type="button" key={purpose.value} className={`purpose-card ${need.purposeCode === purpose.value ? "is-selected" : ""}`} onClick={() => updateNeed({ ...need, purposeCode: purpose.value })}><i /><strong>{purpose.label}</strong><span>{purpose.hint}</span></button>)}</div>
         {errors.purposeCode && <span className="form-error">{errors.purposeCode}</span>}
-        <div className="form-row">
-          <Field label="Сумма" hint="В рублях" error={errors.amount}><div className="input-suffix"><input inputMode="decimal" placeholder="1 000 000" value={need.amount} onChange={(e) => updateNeed({ ...need, amount: e.target.value })} /><span>₽</span></div></Field>
-          <Field label="Срок" hint="От 1 до 360 месяцев" error={errors.termMonths}><div className="input-suffix"><input inputMode="numeric" placeholder="12" value={need.termMonths} onChange={(e) => updateNeed({ ...need, termMonths: e.target.value })} /><span>мес.</span></div></Field>
+        <div className="need-ranges">
+          <div className="need-range">
+            <SliderInput
+              className="need-range__control"
+              label="Сумма кредита"
+              value={focusedRange === "amount" ? need.amount : formatInputNumber(need.amount)}
+              sliderValue={sliderValue(need.amount, amountMin, amountMax)}
+              min={amountMin}
+              max={amountMax}
+              step={50_000}
+              size={64}
+              client="desktop"
+              rightAddons="₽"
+              steps={[formatCompactMoney(amountMin), formatCompactMoney(amountMid), formatCompactMoney(amountMax)]}
+              onChange={(_, payload) => updateRange("amount", payload.value)}
+              onFocus={() => setFocusedRange("amount")}
+              onBlur={() => setFocusedRange("")}
+              dataTestId="credit-amount-slider"
+            />
+            {errors.amount && <span className="form-error">{errors.amount}</span>}
+          </div>
+          <div className="need-range">
+            <SliderInput
+              className="need-range__control"
+              label="Срок кредита"
+              value={focusedRange === "termMonths" ? need.termMonths : formatInputNumber(need.termMonths)}
+              sliderValue={sliderValue(need.termMonths, termMin, termMax)}
+              min={termMin}
+              max={termMax}
+              step={1}
+              size={64}
+              client="desktop"
+              rightAddons="мес."
+              steps={[formatTerm(termMin), formatTerm(termMid), formatTerm(termMax)]}
+              onChange={(_, payload) => updateRange("termMonths", payload.value)}
+              onFocus={() => setFocusedRange("termMonths")}
+              onBlur={() => setFocusedRange("")}
+              dataTestId="credit-term-slider"
+            />
+            {errors.termMonths && <span className="form-error">{errors.termMonths}</span>}
+          </div>
         </div>
-        <Button type="submit">Подобрать продукты</Button>
+        <Button type="submit" onClick={search}>Подобрать продукты</Button>
       </section>
       <aside className="need-aside"><div className="metric"><span>до</span><b>10 млн ₽</b><small>в демонстрационных продуктах</small></div><div className="metric"><span>решение</span><b>прозрачно</b><small>покажем причины рекомендации</small></div></aside>
     </form>
