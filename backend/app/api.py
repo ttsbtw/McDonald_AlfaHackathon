@@ -1,3 +1,6 @@
+import csv
+import io
+import json
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -7,17 +10,28 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import StaleDataError
 
-from .auth import BankEmployee, Client, CurrentUser, DB, create_token, dummy_hash, password_hash
+from .auth import DB, BankEmployee, Client, CurrentUser, create_token, dummy_hash, password_hash
 from .errors import APIError
-from .models import Application, ApplicationEvent, Assessment, Company, CreditProduct, ReviewAction, User, utc_now
-from .scoring import assess_application
-from .scoring.contracts import PolicyValidationError
+from .models import (
+    Application,
+    ApplicationEvent,
+    Assessment,
+    AuditLog,
+    Company,
+    ComplianceReview,
+    CreditProduct,
+    ReviewAction,
+    User,
+    utc_now,
+)
+from .pipeline.processing import ProcessingPipeline
 from .schemas import (
     ApplicationEventOut,
     AssessmentOut,
     BankApplicationOut,
     BankApplicationPage,
     CompanyOut,
+    ComplianceReviewIn,
     DecisionIn,
     DraftCreate,
     DraftOut,
@@ -26,13 +40,24 @@ from .schemas import (
     ErrorResponse,
     ProductOut,
     RequestInfoIn,
+    SubmitIn,
     TokenOut,
     UserOut,
 )
+from .scoring.contracts import PolicyValidationError, to_json_value
 
 router = APIRouter(prefix="/api/v1", responses={
     status: {"model": ErrorResponse} for status in (401, 403, 404, 409, 422, 503)
 })
+
+processing_pipeline = ProcessingPipeline()
+
+
+def add_audit(db, item, company, actor_id, event_type, source, payload):
+    db.add(AuditLog(
+        application_id=item.id, client_identifier=company.inn, actor_id=actor_id,
+        event_type=event_type, source=source, payload=to_json_value(payload),
+    ))
 
 
 @router.post("/auth/login", response_model=TokenOut, tags=["Авторизация"])
@@ -110,6 +135,8 @@ def create_draft(payload: DraftCreate, db: DB, user: Client, response: Response)
         application_id=item.id, actor_id=user.id, application_revision=item.revision,
         event_type="DRAFT_CREATED", from_status=None, to_status="DRAFT",
     ))
+    add_audit(db, item, company, user.id, "APPLICATION_CREATED", "applications",
+              {"revision": item.revision, "status": item.status})
     db.commit()
     response.headers["Location"] = f"/api/v1/applications/{item.id}"
     return item
@@ -185,6 +212,7 @@ def bank_application_out(row):
         risk_level=result.get("risk_level"),
         score=result.get("score"),
         recommendation=result.get("recommendation"),
+        preliminary_decision=result.get("preliminary_decision"),
     )
 
 
@@ -230,6 +258,54 @@ def bank_assessments(application_id: UUID, db: DB, user: BankEmployee):
     ).all()
 
 
+@router.get("/bank/applications/{application_id}/audit", tags=["Рабочее место сотрудника"])
+def bank_audit_export(application_id: UUID, db: DB, user: BankEmployee,
+                      format: Literal["json", "csv"] = "json"):
+    item = db.get(Application, application_id)
+    if item is None or item.status == "DRAFT":
+        raise APIError(404, "APPLICATION_NOT_FOUND", "Заявка не найдена.")
+    rows = db.scalars(select(AuditLog).where(AuditLog.application_id == application_id)
+                      .order_by(AuditLog.created_at, AuditLog.id)).all()
+    records = [{"id": str(row.id), "application_id": str(row.application_id),
+                "client_identifier": row.client_identifier, "actor_id": str(row.actor_id) if row.actor_id else None,
+                "event_type": row.event_type, "source": row.source,
+                "payload": row.payload, "created_at": row.created_at.isoformat()} for row in rows]
+    if format == "json":
+        return {"application_id": str(application_id), "records": records}
+    stream = io.StringIO(newline="")
+    writer = csv.DictWriter(stream, fieldnames=("id", "application_id", "client_identifier", "actor_id",
+                                                "event_type", "source", "payload", "created_at"))
+    writer.writeheader()
+    for record in records:
+        writer.writerow({**record, "payload": json.dumps(record["payload"], ensure_ascii=False, sort_keys=True)})
+    return Response(stream.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="application-{application_id}-audit.csv"'})
+
+
+@router.post("/bank/applications/{application_id}/compliance-review", tags=["Рабочее место сотрудника"])
+def resolve_compliance_review(application_id: UUID, payload: ComplianceReviewIn, db: DB, user: BankEmployee):
+    item = db.get(Application, application_id)
+    if item is None or item.status != "UNDER_REVIEW":
+        raise APIError(409, "APPLICATION_NOT_REVIEWABLE", "Compliance-проверка доступна для заявки на рассмотрении.")
+    assessment = current_assessment(db, item)
+    compliance_rules = {"COMPLIANCE_POTENTIAL_MATCH", "COMPLIANCE_CONFIRMED_MATCH", "COMPLIANCE_ERROR"}
+    rules = assessment.result.get("underwriting", {}).get("rules", [])
+    if not any(rule.get("code") in compliance_rules for rule in rules):
+        raise APIError(409, "COMPLIANCE_REVIEW_NOT_REQUIRED", "В оценке нет совпадения или ошибки Compliance для разбора.")
+    review = ComplianceReview(
+        application_id=item.id, assessment_id=assessment.id, employee_id=user.id,
+        outcome=payload.outcome, comment=payload.comment.strip(),
+    )
+    db.add(review)
+    company = db.get(Company, item.company_id)
+    add_audit(db, item, company, user.id, "COMPLIANCE_REVIEW", "employee_compliance", {
+        "assessment_id": str(assessment.id), "outcome": payload.outcome, "comment": payload.comment.strip(),
+    })
+    db.commit()
+    return {"application_id": str(item.id), "assessment_id": str(assessment.id),
+            "outcome": review.outcome, "comment": review.comment, "created_at": review.created_at}
+
+
 def current_assessment(db, item):
     assessment = db.scalar(
         select(Assessment)
@@ -257,6 +333,7 @@ def save_review_action(db, item, employee, assessment, action, message, target_s
     ))
     item.status = target_status
     item.updated_at = utc_now()
+    company = db.get(Company, item.company_id)
     try:
         db.flush()
         db.add(ApplicationEvent(
@@ -268,6 +345,10 @@ def save_review_action(db, item, employee, assessment, action, message, target_s
             to_status=target_status,
             message=message,
         ))
+        add_audit(db, item, company, employee.id, "REVIEW_ACTION", "employee_review", {
+            "action": action, "from_status": previous_status, "to_status": target_status,
+            "application_revision": assessment.application_revision, "message": message,
+        })
         db.commit()
     except (StaleDataError, IntegrityError):
         db.rollback()
@@ -306,6 +387,25 @@ def decide_application(application_id: UUID, payload: DecisionIn, db: DB, user: 
             raise APIError(409, "ASSESSMENT_INCOMPLETE", "Нельзя одобрить заявку без полной оценки и проверок.")
         if result.get("hard_stops"):
             raise APIError(409, "ASSESSMENT_HARD_STOP", "Нельзя одобрить заявку с обязательным ограничением.")
+        underwriting = result.get("underwriting", {})
+        if underwriting.get("status") != "PASS":
+            rules = underwriting.get("rules", [])
+            compliance_codes = {"COMPLIANCE_POTENTIAL_MATCH", "COMPLIANCE_CONFIRMED_MATCH", "COMPLIANCE_ERROR"}
+            review_codes = {rule.get("code") for rule in rules if rule.get("outcome") == "REVIEW"}
+            has_reject = any(rule.get("outcome") == "REJECT" for rule in rules)
+            latest_compliance_review = db.scalar(
+                select(ComplianceReview)
+                .where(ComplianceReview.application_id == item.id,
+                       ComplianceReview.assessment_id == assessment.id)
+                .order_by(ComplianceReview.created_at.desc(), ComplianceReview.id.desc())
+                .limit(1)
+            )
+            compliance_manually_cleared = (
+                bool(review_codes) and review_codes.issubset(compliance_codes) and not has_reject
+                and latest_compliance_review is not None and latest_compliance_review.outcome == "CLEAR"
+            )
+            if not compliance_manually_cleared:
+                raise APIError(409, "MANUAL_CHECK_REQUIRED", "Не пройдены обязательные проверки; требуется дополнительная проверка.")
         product = db.get(CreditProduct, item.product_code)
         if product is None:
             raise APIError(409, "PRODUCT_UNAVAILABLE", "Не удалось получить условия продукта.")
@@ -346,6 +446,10 @@ def update_draft(application_id: UUID, payload: DraftUpdate, db: DB, user: Clien
                 application_id=item.id, actor_id=user.id, application_revision=item.revision,
                 event_type="DRAFT_UPDATED", from_status=old_status, to_status=old_status,
             ))
+            company = db.get(Company, item.company_id)
+            add_audit(db, item, company, user.id, "APPLICATION_UPDATED", "applications", {
+                "revision": item.revision, "fields": sorted(changes), "status": old_status,
+            })
         db.commit()
     except StaleDataError:
         db.rollback()
@@ -354,7 +458,7 @@ def update_draft(application_id: UUID, payload: DraftUpdate, db: DB, user: Clien
 
 
 @router.post("/applications/{application_id}/submit", response_model=DraftOut, tags=["Заявки"])
-def submit_application(application_id: UUID, db: DB, user: Client):
+def submit_application(application_id: UUID, db: DB, user: Client, payload: SubmitIn = SubmitIn()):
     item = own_application(db, user, application_id)
     if item.status == "UNDER_REVIEW":
         # Retrying a successful submit is safe and does not create another assessment.
@@ -377,36 +481,37 @@ def submit_application(application_id: UUID, db: DB, user: Client):
     if product is None or not product.is_active or company is None:
         raise APIError(409, "APPLICATION_DATA_UNAVAILABLE", "Не удалось получить данные продукта или компании.")
 
-    # Local deterministic simulators: the demo company registry confirms the
-    # stored synthetic company, and credit-history fixtures have no delinquencies.
-    checks = [
-        {"source": "company_registry", "status": "PASS", "reason_code": "SYNTHETIC_COMPANY_MATCH"},
-        {"source": "credit_history", "status": "PASS", "reason_code": "NO_DEMO_DELINQUENCIES"},
-    ]
-    as_of_date = utc_now().date()
-    input_data = {
-        "schema_version": "1.0", "application_id": str(item.id),
-        "application_revision": item.revision, "as_of_date": as_of_date.isoformat(),
-        "product_code": item.product_code, "requested_amount": item.requested_amount,
-        "term_months": item.term_months, "purpose": item.purpose,
-        "legal_form": company.legal_form, "registration_date": company.registration_date.isoformat(),
-        "average_monthly_revenue": item.average_monthly_revenue,
-        "average_monthly_operating_expenses": item.average_monthly_operating_expenses,
-        "existing_monthly_debt_payment": item.existing_monthly_debt_payment,
-        "current_overdue_amount": "0.00", "max_overdue_days_12m": 0,
-    }
     try:
-        result = assess_application(input_data, product.scoring_policy, checks)
+        processing = processing_pipeline.run(item, company, product,
+                                             payload.credit_history_consent, utc_now())
     except PolicyValidationError:
+        add_audit(db, item, company, user.id, "PIPELINE_ERROR", "scoring",
+                  {"code": "SCORING_POLICY_INVALID", "revision": item.revision})
+        db.commit()
         raise APIError(503, "SCORING_POLICY_INVALID", "Правила оценки продукта временно недоступны.") from None
+    except Exception as exc:
+        add_audit(db, item, company, user.id, "PIPELINE_ERROR", "processing_pipeline",
+                  {"code": "PROCESSING_FAILED", "error_type": type(exc).__name__, "revision": item.revision})
+        db.commit()
+        raise APIError(503, "PROCESSING_UNAVAILABLE", "Не удалось выполнить проверки. Заявка не одобрена и может быть отправлена повторно.") from None
+    bki, compliance, result = processing["bki"], processing["compliance"], processing["result"]
+    underwriting = processing["underwriting"]
+    input_data, checks = processing["input_data"], processing["checks"]
 
     previous_status = item.status
     assessment = Assessment(
         application_id=item.id, application_revision=item.revision,
-        input_snapshot=result["input_snapshot"] or {"input_data": input_data, "checks": checks},
-        result=result,
+        input_snapshot=to_json_value(result["input_snapshot"] or {"input_data": input_data, "checks": checks}),
+        result=to_json_value(result),
     )
     db.add(assessment)
+    add_audit(db, item, company, user.id, "BKI_CHECK", bki["source"], bki)
+    add_audit(db, item, company, user.id, "COMPLIANCE_CHECK", compliance["source"], compliance)
+    add_audit(db, item, company, user.id, "UNDERWRITING_EVALUATED", "underwriting_rules", underwriting)
+    add_audit(db, item, company, user.id, "SCORING_COMPLETED", "scoring", {
+        "assessment_id": str(assessment.id), "revision": item.revision,
+        "input_snapshot": result.get("input_snapshot"), "result": result,
+    })
     item.status = "UNDER_REVIEW"
     item.updated_at = utc_now()
     try:
@@ -416,6 +521,8 @@ def submit_application(application_id: UUID, db: DB, user: Client):
             event_type="RESUBMITTED" if previous_status == "NEEDS_INFO" else "SUBMITTED",
             from_status=previous_status, to_status="UNDER_REVIEW",
         ))
+        add_audit(db, item, company, user.id, "APPLICATION_SUBMITTED", "applications",
+                  {"revision": item.revision, "from_status": previous_status, "to_status": "UNDER_REVIEW"})
         db.commit()
     except StaleDataError:
         db.rollback()

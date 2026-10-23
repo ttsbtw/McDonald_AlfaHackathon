@@ -279,7 +279,7 @@ def test_migration_matches_models_and_roundtrip(database_url):
     command.upgrade(config, "head")
     command.upgrade(config, "head")
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0004_review_actions"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0006_compliance_reviews"
     engine.dispose()
 
 
@@ -291,7 +291,8 @@ def test_submit_persists_explained_assessment_for_selected_product(client, appli
         "average_monthly_operating_expenses": "600000.00", "existing_monthly_debt_payment": "50000.00",
     })
 
-    submitted = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers)
+    submitted = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers,
+                            json={"credit_history_consent": True})
     assert submitted.status_code == 200, submitted.text
     assert submitted.json()["status"] == "UNDER_REVIEW"
 
@@ -318,8 +319,17 @@ def test_submit_persists_explained_assessment_for_selected_product(client, appli
         "company_registry", "credit_history",
     ]
 
+    audit = client.get(f"/api/v1/bank/applications/{draft['id']}/audit", headers=employee_headers)
+    assert audit.status_code == 200
+    assert {row["event_type"] for row in audit.json()["records"]} >= {
+        "BKI_CHECK", "COMPLIANCE_CHECK", "UNDERWRITING_EVALUATED", "SCORING_COMPLETED",
+    }
+    csv_export = client.get(f"/api/v1/bank/applications/{draft['id']}/audit?format=csv", headers=employee_headers)
+    assert csv_export.status_code == 200 and "event_type,source" in csv_export.text
+
     # A retry after a successful submit must not create a second assessment.
-    retried = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers)
+    retried = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers,
+                          json={"credit_history_consent": True})
     assert retried.status_code == 200
     assert client.get(f"/api/v1/bank/applications/{draft['id']}/assessments",
                       headers=employee_headers).json() == assessments.json()
@@ -327,7 +337,7 @@ def test_submit_persists_explained_assessment_for_selected_product(client, appli
 
 @pytest.mark.parametrize(("expenses", "existing_debt", "expected_score", "recommendation"), [
     ("600000.00", "50000.00", 100, "APPROVE"),
-    ("900000.00", "12000.00", 73, "REVIEW"),
+    ("900000.00", "12000.00", 58, "REVIEW"),
     ("900000.00", "100000.00", 48, "DECLINE"),
 ])
 def test_submit_expected_approval_review_and_decline_outcomes(
@@ -338,7 +348,8 @@ def test_submit_expected_approval_review_and_decline_outcomes(
         "purpose": "Пополнение оборотных средств", "average_monthly_revenue": "1000000.00",
         "average_monthly_operating_expenses": expenses, "existing_monthly_debt_payment": existing_debt,
     })
-    submitted = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers)
+    submitted = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers,
+                            json={"credit_history_consent": True})
     assert submitted.status_code == 200, submitted.text
 
     employee_headers = auth_headers(client, "employee", EMPLOYEE_PASSWORD)
@@ -360,7 +371,8 @@ def test_employee_can_request_information_and_client_resubmits_new_assessment(cl
         "purpose": "Пополнение оборотных средств", "average_monthly_revenue": "1000000.00",
         "average_monthly_operating_expenses": "900000.00", "existing_monthly_debt_payment": "12000.00",
     })
-    submitted = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers)
+    submitted = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers,
+                            json={"credit_history_consent": True})
     assert submitted.status_code == 200
 
     employee_headers = auth_headers(client, "employee", EMPLOYEE_PASSWORD)
@@ -377,7 +389,8 @@ def test_employee_can_request_information_and_client_resubmits_new_assessment(cl
         "existing_monthly_debt_payment": "50000.00",
     })
     assert updated.status_code == 200, updated.text
-    resubmitted = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers)
+    resubmitted = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers,
+                              json={"credit_history_consent": True})
     assert resubmitted.status_code == 200
     assert resubmitted.json()["status"] == "UNDER_REVIEW"
 
@@ -385,3 +398,52 @@ def test_employee_can_request_information_and_client_resubmits_new_assessment(cl
     assert [item["application_revision"] for item in assessments.json()] == [updated.json()["revision"], draft["revision"]]
     assert assessments.json()[0]["result"]["score"] == 100
     assert assessments.json()[0]["result"]["recommendation"] == "APPROVE"
+
+
+def test_missing_bki_consent_is_recorded_and_never_approved(client, headers):
+    draft = create(client, headers, {
+        "product_code": "working_capital", "requested_amount": "300000.00", "term_months": 12,
+        "purpose": "Пополнение оборотных средств", "average_monthly_revenue": "1000000.00",
+        "average_monthly_operating_expenses": "600000.00", "existing_monthly_debt_payment": "50000.00",
+    })
+    submitted = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers,
+                            json={"credit_history_consent": False})
+    assert submitted.status_code == 200
+    employee_headers = auth_headers(client, "employee", EMPLOYEE_PASSWORD)
+    result = client.get(f"/api/v1/bank/applications/{draft['id']}/assessments",
+                        headers=employee_headers).json()[0]["result"]
+    assert result["underwriting"]["status"] == "REVIEW"
+    assert "CONSENT_REQUIRED" in result["input_snapshot"]["checks"][1]["reason_code"]
+    approved = client.post(f"/api/v1/bank/applications/{draft['id']}/decision", headers=employee_headers,
+                           json={"decision": "APPROVED"})
+    assert approved.status_code == 409
+
+
+def test_confirmed_compliance_match_requires_and_records_manual_clearance(client, application, headers):
+    draft = create(client, headers, {
+        "product_code": "working_capital", "requested_amount": "300000.00", "term_months": 12,
+        "purpose": "Пополнение оборотных средств", "average_monthly_revenue": "1000000.00",
+        "average_monthly_operating_expenses": "600000.00", "existing_monthly_debt_payment": "50000.00",
+    })
+    with application.state.session_factory() as session:
+        company = session.scalar(select(Company).where(Company.inn == "000000000001"))
+        company.inn = "000000000009"
+        session.commit()
+    submitted = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers,
+                            json={"credit_history_consent": True})
+    assert submitted.status_code == 200
+    employee_headers = auth_headers(client, "employee", EMPLOYEE_PASSWORD)
+    result = client.get(f"/api/v1/bank/applications/{draft['id']}/assessments",
+                        headers=employee_headers).json()[0]["result"]
+    assert result["underwriting"]["status"] == "REVIEW"
+    assert result["preliminary_decision"] == "REVIEW"
+    blocked = client.post(f"/api/v1/bank/applications/{draft['id']}/decision", headers=employee_headers,
+                          json={"decision": "APPROVED"})
+    assert blocked.status_code == 409
+    reviewed = client.post(f"/api/v1/bank/applications/{draft['id']}/compliance-review",
+                           headers=employee_headers,
+                           json={"outcome": "CLEAR", "comment": "Синтетический сценарий проверен сотрудником."})
+    assert reviewed.status_code == 200 and reviewed.json()["outcome"] == "CLEAR"
+    approved = client.post(f"/api/v1/bank/applications/{draft['id']}/decision", headers=employee_headers,
+                           json={"decision": "APPROVED"})
+    assert approved.status_code == 200 and approved.json()["status"] == "APPROVED"
