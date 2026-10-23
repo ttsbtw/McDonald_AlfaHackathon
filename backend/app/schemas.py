@@ -134,6 +134,7 @@ class BankApplicationOut(DraftOut):
     company: CompanyOut
     product: ProductOut | None
     risk_level: Literal["LOW", "MEDIUM", "HIGH", "UNKNOWN"] | None
+    approved_risk_level: Literal["LOW", "MEDIUM", "HIGH", "UNKNOWN"] | None = None
     score: int | None
     recommendation: Literal["APPROVE", "REVIEW", "DECLINE", "REQUEST_INFO"] | None
     preliminary_decision: Literal["APPROVE", "REVIEW", "DECLINE", "REQUEST_INFO"] | None

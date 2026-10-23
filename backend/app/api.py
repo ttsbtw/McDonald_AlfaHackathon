@@ -146,6 +146,24 @@ def approved_actions_by_application(db, items):
     return latest
 
 
+def approved_alternative_risks_by_application(db, items):
+    application_ids = [item.id for item in items]
+    if not application_ids:
+        return {}
+    offers = db.scalars(
+        select(AlternativeOffer)
+        .where(AlternativeOffer.application_id.in_(application_ids), AlternativeOffer.status == "ACCEPTED")
+        .order_by(AlternativeOffer.decided_at.desc(), AlternativeOffer.id.desc())
+    ).all()
+    latest = {}
+    for offer in offers:
+        scoring = (offer.evaluation or {}).get("scoring", {})
+        risk_level = scoring.get("risk_level")
+        if risk_level in {"LOW", "MEDIUM", "HIGH", "UNKNOWN"}:
+            latest.setdefault(offer.application_id, risk_level)
+    return latest
+
+
 def client_application_out(item, approved_action=None):
     payload = DraftOut.model_validate(item).model_dump()
     if approved_action is not None:
@@ -240,7 +258,7 @@ def bank_application_query():
     )
 
 
-def bank_application_out(row, approved_action=None):
+def bank_application_out(row, approved_action=None, approved_risk_level=None):
     item, company, client, product, assessment = row
     result = assessment.result if assessment else {}
     payload = DraftOut.model_validate(item).model_dump()
@@ -256,6 +274,7 @@ def bank_application_out(row, approved_action=None):
         company=company,
         product=product,
         risk_level=result.get("risk_level"),
+        approved_risk_level=approved_risk_level,
         score=result.get("score"),
         recommendation=result.get("recommendation"),
         preliminary_decision=result.get("preliminary_decision"),
@@ -279,9 +298,11 @@ def bank_applications(
         .limit(limit).offset(offset)
     ).all()
     approved_actions = approved_actions_by_application(db, [row[0] for row in items])
+    approved_risks = approved_alternative_risks_by_application(db, [row[0] for row in items])
     total = db.scalar(select(func.count()).select_from(Application).where(*filters))
     return {
-        "items": [bank_application_out(row, approved_actions.get(row[0].id)) for row in items],
+        "items": [bank_application_out(row, approved_actions.get(row[0].id), approved_risks.get(row[0].id))
+                  for row in items],
         "total": total, "limit": limit, "offset": offset,
     }
 
@@ -294,7 +315,8 @@ def bank_application(application_id: UUID, db: DB, user: BankEmployee):
     if row is None:
         raise APIError(404, "APPLICATION_NOT_FOUND", "Заявка не найдена.")
     approved_action = approved_actions_by_application(db, [row[0]]).get(row[0].id)
-    return bank_application_out(row, approved_action)
+    approved_risk = approved_alternative_risks_by_application(db, [row[0]]).get(row[0].id)
+    return bank_application_out(row, approved_action, approved_risk)
 
 
 @router.get("/bank/applications/{application_id}/assessments", response_model=list[AssessmentOut], tags=["Рабочее место сотрудника"])

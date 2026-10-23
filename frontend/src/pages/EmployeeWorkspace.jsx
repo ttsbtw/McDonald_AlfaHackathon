@@ -26,6 +26,17 @@ function BankApplicationAmount({ item }) {
   </span>;
 }
 
+function BankApplicationRisk({ item }) {
+  if (item.status === "APPROVED" && hasChangedApprovedTerms(item) && item.approved_risk_level) {
+    return <span className="bank-table__risk-change" aria-label={`Риск изменился с ${item.risk_level} на ${item.approved_risk_level}`}>
+      <s className={`risk risk--${String(item.risk_level || "unknown").toLowerCase()}`}>{item.risk_level || "—"}</s>
+      <b aria-hidden="true">→</b>
+      <span className={`risk risk--${String(item.approved_risk_level).toLowerCase()}`}>{item.approved_risk_level}</span>
+    </span>;
+  }
+  return <span className={`risk risk--${String(item.risk_level || "unknown").toLowerCase()}`}>{item.risk_level || "—"}</span>;
+}
+
 export default function EmployeeWorkspace({ pathname, navigate }) {
   const [filter, setFilter] = useState(""); const [items, setItems] = useState(null); const [unavailable, setUnavailable] = useState(false); const [error, setError] = useState("");
   async function load() { setError(""); try { const result = await api.bankApplications(filter); setItems(result.items || result); setUnavailable(false); } catch (err) { if (err.status === 404 || err.status === 405) { setUnavailable(true); setItems([]); } else setError(err.message); } }
@@ -36,7 +47,7 @@ export default function EmployeeWorkspace({ pathname, navigate }) {
     {unavailable && <Alert title="Backend обработки ещё не подключён">Интерфейс готов к маршрутам задачи №5. Когда появится `/api/v1/bank/applications`, очередь загрузится автоматически.</Alert>}
     {error && <Alert type="error">{error}</Alert>}
     <div className="filters">{filters.map((status) => <button key={status || "all"} className={filter === status ? "is-active" : ""} onClick={() => setFilter(status)}>{status ? <StatusBadge status={status} /> : "Все"}</button>)}</div>
-    {items === null ? <Skeleton rows={5} /> : items.length ? <div className="bank-table"><div className="bank-table__head"><span>Клиент и цель</span><span>Сумма</span><span>Риск</span><span>Статус</span><span /></div>{items.map((item) => <button key={item.id} onClick={() => navigate(`/employee/applications/${item.id}`)}><span><b>{item.company?.name || item.company_name || "Компания"}</b><small>{item.purpose || "Цель не указана"}</small></span><BankApplicationAmount item={item} /><span className={`risk risk--${String(item.risk_level || "unknown").toLowerCase()}`}>{item.risk_level || "—"}</span><StatusBadge status={item.status} /><i>→</i></button>)}</div> : <EmptyState icon="✓" title={unavailable ? "Ожидаем API обработки" : "В очереди пусто"}>Новых заявок с выбранным статусом нет.</EmptyState>}
+    {items === null ? <Skeleton rows={5} /> : items.length ? <div className="bank-table"><div className="bank-table__head"><span>Клиент и цель</span><span>Сумма</span><span>Риск</span><span>Статус</span><span /></div>{items.map((item) => <button key={item.id} onClick={() => navigate(`/employee/applications/${item.id}`)}><span><b>{item.company?.name || item.company_name || "Компания"}</b><small>{item.purpose || "Цель не указана"}</small></span><BankApplicationAmount item={item} /><BankApplicationRisk item={item} /><StatusBadge status={item.status} /><i>→</i></button>)}</div> : <EmptyState icon="✓" title={unavailable ? "Ожидаем API обработки" : "В очереди пусто"}>Новых заявок с выбранным статусом нет.</EmptyState>}
   </div>;
 }
 

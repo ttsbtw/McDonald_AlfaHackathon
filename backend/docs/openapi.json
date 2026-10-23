@@ -3146,6 +3146,23 @@
               }
             ],
             "title": "Approved Annual Interest Rate"
+          },
+          "approved_risk_level": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "LOW",
+                  "MEDIUM",
+                  "HIGH",
+                  "UNKNOWN"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved Risk Level"
           }
         },
         "additionalProperties": false,
