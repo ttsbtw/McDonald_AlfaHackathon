@@ -267,6 +267,11 @@ a { color: inherit; }
 .review-hero p { max-width: 680px; color: #cdcdc8; line-height: 1.5; }
 .review-hero .status { color: #fff; background: #ffffff1c; }
 .facts--review { grid-template-columns: repeat(3, 1fr); margin: 20px 0 0; }
+.accepted-terms-note { margin: 16px 0 -8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.review-value { display: inline-flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
+.review-value s { color: var(--muted); font-size: 11px; font-weight: 500; text-decoration-color: #a84940; }
+.review-value b { color: var(--red); font-size: 13px; }
+.review-value strong { color: #315f20; }
 .decision-overview, .checks-panel, .compliance-review, .audit-panel { display: flex; flex-direction: column; gap: 22px; }
 .decision-overview__grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 11px; }
 .decision-overview__grid article { min-height: 150px; padding: 18px; border-radius: 15px; display: flex; flex-direction: column; gap: 10px; background: #f5f5f2; }

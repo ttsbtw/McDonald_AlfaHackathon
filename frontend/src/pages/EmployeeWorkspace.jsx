@@ -50,6 +50,9 @@ function BankApplicationAmount({ item }) {
   if (!hasChangedApprovedTerms(item)) return <strong>{formatMoneyRub(item.requested_amount)}</strong>;
   return <span className="bank-table__amount-change"><span className="bank-table__amount-change-original"><strong><s>{formatMoneyRub(item.requested_amount)}</s></strong><small><s>{item.term_months} мес.</s></small></span><b>→</b><span className="bank-table__amount-change-approved"><strong>{formatMoneyRub(item.approved_amount)}</strong><small>{item.approved_term_months} мес.</small></span></span>;
 }
+function ReviewValue({ original, value, money = false }) {
+  return <span className="review-value"><s>{money ? formatMoneyRub(original) : original}</s><b aria-hidden="true">→</b><strong>{money ? formatMoneyRub(value) : value}</strong></span>;
+}
 function BankApplicationRisk({ item }) {
   if (item.status === "APPROVED" && hasChangedApprovedTerms(item) && item.approved_risk_level) return <span className="bank-table__risk-change"><s className={`risk risk--${String(item.risk_level || "unknown").toLowerCase()}`}>{riskLabels[item.risk_level] || "—"}</s><b>→</b><span className={`risk risk--${String(item.approved_risk_level).toLowerCase()}`}>{riskLabels[item.approved_risk_level]}</span></span>;
   return <span className={`risk risk--${String(item.risk_level || "unknown").toLowerCase()}`}>{riskLabels[item.risk_level] || "—"}</span>;
@@ -126,9 +129,29 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
     if (record?.company?.id) loadHistory(record.company.id);
   }, [record?.company?.id, record?.status]);
   useEffect(() => { if (!record || ["APPROVED", "REJECTED"].includes(record.status)) return undefined; const timer = window.setInterval(() => { if (document.visibilityState === "visible") loadRecord(true); }, 5000); return () => window.clearInterval(timer); }, [id, record?.status, unavailable]);
-  const assessment = record?.assessments?.[0];
+  const baseAssessment = record?.assessments?.[0];
+  const acceptedAlternative = alternatives?.alternatives?.find((item) => item.status === "ACCEPTED");
+  const acceptedScoring = acceptedAlternative?.evaluation?.scoring;
+  const acceptedUnderwriting = acceptedAlternative?.evaluation?.underwriting;
+  const assessment = acceptedAlternative && baseAssessment ? {
+    ...baseAssessment,
+    result: {
+      ...baseAssessment.result,
+      ...acceptedScoring,
+      underwriting: acceptedUnderwriting,
+      preliminary_decision: acceptedUnderwriting?.status === "REJECT" ? "DECLINE"
+        : acceptedUnderwriting?.status === "REVIEW" ? "REVIEW"
+          : acceptedScoring?.recommendation,
+    },
+  } : baseAssessment;
+  const decisionApplication = acceptedAlternative ? {
+    ...record,
+    requested_amount: acceptedAlternative.amount,
+    term_months: acceptedAlternative.term_months,
+    preliminary_decision: assessment?.result?.preliminary_decision,
+  } : record;
   const complianceReview = latestComplianceReview(audit, assessment?.id);
-  const approvalReason = approvalBlockReason(record, assessment, complianceReview);
+  const approvalReason = approvalBlockReason(decisionApplication, assessment, complianceReview);
   const reviewOpen = record?.status === "UNDER_REVIEW";
   const finalDecision = ["APPROVED", "REJECTED"].includes(record?.status);
   async function generateAlternatives() {
@@ -150,8 +173,8 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
   if (!record) return <div className="content"><button className="back-link" onClick={onBack}>← К очереди</button><Alert type="error">{error || "Не удалось загрузить заявку."}</Alert><Button onClick={() => loadRecord()}>Повторить</Button></div>;
   return <div className="content content--wide"><button className="back-link" onClick={onBack}>← К очереди</button>{error && <Alert type="error">{error}</Alert>}<div className="review-layout"><main>
     <section className="review-hero"><div><span className="eyebrow">Заявка {String(id).slice(0, 8)}</span><h1>{record.company?.name || "Компания"}</h1><p>{record.purpose || "Цель финансирования не указана"}</p></div><StatusBadge status={record.status} /></section>
-    <section className="panel"><div className="panel-title"><div><span className="eyebrow eyebrow--red">Анкета</span><h2>Параметры и финансы</h2></div></div><dl className="facts facts--review"><div><dt>Сумма</dt><dd>{formatMoneyRub(record.requested_amount)}</dd></div><div><dt>Срок</dt><dd>{record.term_months ? `${record.term_months} мес.` : "—"}</dd></div><div><dt>Выручка</dt><dd>{record.average_monthly_revenue === null || record.average_monthly_revenue === undefined ? "—" : `${formatMoneyRub(record.average_monthly_revenue)}/мес.`}</dd></div><div><dt>Расходы</dt><dd>{record.average_monthly_operating_expenses === null || record.average_monthly_operating_expenses === undefined ? "—" : `${formatMoneyRub(record.average_monthly_operating_expenses)}/мес.`}</dd></div><div><dt>Текущие платежи</dt><dd>{record.existing_monthly_debt_payment === null || record.existing_monthly_debt_payment === undefined ? "—" : `${formatMoneyRub(record.existing_monthly_debt_payment)}/мес.`}</dd></div><div><dt>Продукт</dt><dd>{record.product?.name || record.product_code || "—"}</dd></div></dl></section>
-    <DecisionOverview application={record} assessment={assessment} />
+    <section className="panel"><div className="panel-title"><div><span className="eyebrow eyebrow--red">Анкета</span><h2>Параметры и финансы</h2></div></div>{acceptedAlternative && <p className="accepted-terms-note">Клиент принял альтернативу. В карточке и расчёте решения показаны новые условия; исходные сохранены ниже для сравнения.</p>}<dl className="facts facts--review"><div><dt>{acceptedAlternative ? "Сумма после альтернативы" : "Сумма"}</dt><dd>{acceptedAlternative ? <ReviewValue original={record.requested_amount} value={acceptedAlternative.amount} money /> : formatMoneyRub(record.requested_amount)}</dd></div><div><dt>{acceptedAlternative ? "Срок после альтернативы" : "Срок"}</dt><dd>{acceptedAlternative ? <ReviewValue original={`${record.term_months} мес.`} value={`${acceptedAlternative.term_months} мес.`} /> : record.term_months ? `${record.term_months} мес.` : "—"}</dd></div><div><dt>Выручка</dt><dd>{record.average_monthly_revenue === null || record.average_monthly_revenue === undefined ? "—" : `${formatMoneyRub(record.average_monthly_revenue)}/мес.`}</dd></div><div><dt>Расходы</dt><dd>{record.average_monthly_operating_expenses === null || record.average_monthly_operating_expenses === undefined ? "—" : `${formatMoneyRub(record.average_monthly_operating_expenses)}/мес.`}</dd></div><div><dt>Текущие платежи</dt><dd>{record.existing_monthly_debt_payment === null || record.existing_monthly_debt_payment === undefined ? "—" : `${formatMoneyRub(record.existing_monthly_debt_payment)}/мес.`}</dd></div><div><dt>Продукт</dt><dd>{record.product?.name || record.product_code || "—"}</dd></div></dl></section>
+    <DecisionOverview application={decisionApplication} assessment={assessment} />
     <CompanyHistoryPanel
       items={history}
       total={historyTotal}
