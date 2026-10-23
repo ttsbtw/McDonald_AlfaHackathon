@@ -110,6 +110,9 @@ export const api = {
   }),
   bankApplications: (status = "") => request(`/bank/applications${status ? `?status=${status}` : ""}`),
   bankApplication: (id) => request(`/bank/applications/${id}`),
+  bankCompanyHistory: (companyId, limit = 20, offset = 0) => request(
+    `/bank/companies/${companyId}/history?limit=${limit}&offset=${offset}`,
+  ),
   bankAssessments: (id) => request(`/bank/applications/${id}/assessments`),
   bankAudit: (id) => request(`/bank/applications/${id}/audit?format=json`),
   downloadBankAudit: (id, format) => download(

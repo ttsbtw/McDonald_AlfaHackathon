@@ -209,6 +209,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
   const status = saved?.status;
   const readOnly = ["SUBMITTED", "UNDER_REVIEW", "APPROVED", "REJECTED"].includes(status);
   const finalDecision = ["APPROVED", "REJECTED"].includes(status);
+  const approvedDecision = status === "APPROVED";
   const heading = finalDecision
     ? { eyebrow: "Этап 3 из 3", title: "Решение по заявке", number: "03" }
     : status === "UNDER_REVIEW" || status === "SUBMITTED"
@@ -222,11 +223,17 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
   const termMin = Number(product?.min_term_months ?? 6);
   const termMax = Number(product?.max_term_months ?? 60);
   const sliderValue = (value, min, max) => Math.min(max, Math.max(min, Number(value) || min));
+  const displayedAmount = approvedDecision && saved?.approved_amount != null
+    ? saved.approved_amount : form.requested_amount;
+  const displayedTerm = approvedDecision && saved?.approved_term_months != null
+    ? saved.approved_term_months : form.term_months;
+  const displayedRate = approvedDecision && saved?.approved_annual_interest_rate != null
+    ? saved.approved_annual_interest_rate : product?.annual_interest_rate;
   const creditSummary = useMemo(() => calculateCreditSummary(
-    form.requested_amount,
-    form.term_months,
-    product?.annual_interest_rate,
-  ), [form.requested_amount, form.term_months, product?.annual_interest_rate]);
+    displayedAmount,
+    displayedTerm,
+    displayedRate,
+  ), [displayedAmount, displayedTerm, displayedRate]);
 
   useEffect(() => {
     if (["NEEDS_INFO", "APPROVED", "REJECTED"].includes(status)) setNotice("");
@@ -369,8 +376,8 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
         <section className="panel form-section">
           <div className="form-section__heading"><span>02</span><div><h2>Параметры кредита</h2><p>{readOnly ? "Параметры отправленной заявки" : "Можно изменить до отправки"}</p></div></div>
           {readOnly ? <>
-            <dl className="facts readonly-facts"><div><dt>Продукт</dt><dd>{product?.name || form.product_code || "—"}</dd></div><div><dt>Сумма</dt><dd>{formatMoney(form.requested_amount)}</dd></div><div><dt>Срок</dt><dd>{form.term_months || "—"} мес.</dd></div></dl>
-            {creditSummary && <CreditSummary summary={creditSummary} rate={product?.annual_interest_rate} />}
+            <dl className="facts readonly-facts"><div><dt>Продукт</dt><dd>{product?.name || form.product_code || "—"}</dd></div><div><dt>{approvedDecision ? "Одобренная сумма" : "Сумма"}</dt><dd>{formatMoney(displayedAmount)}</dd></div><div><dt>{approvedDecision ? "Одобренный срок" : "Срок"}</dt><dd>{displayedTerm || "—"} мес.</dd></div></dl>
+            {creditSummary && <CreditSummary summary={creditSummary} rate={displayedRate} approved={approvedDecision} />}
             <div className="readonly-copy"><small>Цель финансирования</small><p>{form.purpose || "Не указана"}</p></div>
           </> : <>
             <Field label="Продукт" error={errors.product_code}><input value={product?.name || form.product_code} disabled /></Field>
@@ -381,7 +388,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
         </section>
         <section className="panel form-section">
           <div className="form-section__heading"><span>03</span><div><h2>Финансовые показатели</h2><p>Средние значения за последние 12 завершённых месяцев</p></div></div>
-          {readOnly ? <dl className="facts readonly-facts readonly-facts--financial"><div><dt>Выручка в месяц</dt><dd>{formatMoney(form.average_monthly_revenue)}</dd></div><div><dt>Операционные расходы</dt><dd>{formatMoney(form.average_monthly_operating_expenses)}</dd></div><div><dt>Платежи по кредитам</dt><dd>{formatMoney(form.existing_monthly_debt_payment)}</dd></div></dl> : <>
+          {readOnly ? <><dl className="facts readonly-facts readonly-facts--financial"><div><dt>Выручка в месяц</dt><dd>{formatMoney(form.average_monthly_revenue)}</dd></div><div><dt>Операционные расходы</dt><dd>{formatMoney(form.average_monthly_operating_expenses)}</dd></div><div><dt>Платежи по действующим кредитам</dt><dd>{formatMoney(form.existing_monthly_debt_payment)}</dd></div></dl>{approvedDecision && <p className="approved-financial-note">Выручка, расходы и платежи по действующим кредитам сохранены из анкеты. Платёж по одобренному кредиту рассчитан выше.</p>}</> : <>
             <div className="form-row application-ranges"><div className="application-range"><SliderInput className="need-range__control" label="Выручка в месяц" value={focusedRange === "revenue" ? form.average_monthly_revenue : formatInputNumber(form.average_monthly_revenue)} sliderValue={sliderValue(form.average_monthly_revenue, 0, FINANCIAL_MAX)} min={0} max={FINANCIAL_MAX} step={50_000} size={64} client="desktop" rightAddons="₽" steps={["0 ₽", formatCompactMoney(FINANCIAL_MAX / 2), formatCompactMoney(FINANCIAL_MAX)]} error={errors.average_monthly_revenue} onChange={(_, payload) => updateRange("average_monthly_revenue", payload.value)} onFocus={() => setFocusedRange("revenue")} onBlur={() => finishRange("average_monthly_revenue", 0, FINANCIAL_MAX)} dataTestId="application-revenue-slider" /></div><div className="application-range"><SliderInput className="need-range__control" label="Операционные расходы" hint="Без платежей по кредитам" value={focusedRange === "expenses" ? form.average_monthly_operating_expenses : formatInputNumber(form.average_monthly_operating_expenses)} sliderValue={sliderValue(form.average_monthly_operating_expenses, 0, FINANCIAL_MAX)} min={0} max={FINANCIAL_MAX} step={50_000} size={64} client="desktop" rightAddons="₽" steps={["0 ₽", formatCompactMoney(FINANCIAL_MAX / 2), formatCompactMoney(FINANCIAL_MAX)]} error={errors.average_monthly_operating_expenses} onChange={(_, payload) => updateRange("average_monthly_operating_expenses", payload.value)} onFocus={() => setFocusedRange("expenses")} onBlur={() => finishRange("average_monthly_operating_expenses", 0, FINANCIAL_MAX)} dataTestId="application-expenses-slider" /></div></div>
             <div className="application-range application-range--full"><SliderInput className="need-range__control" label="Ежемесячные платежи по действующим кредитам" value={focusedRange === "debt" ? form.existing_monthly_debt_payment : formatInputNumber(form.existing_monthly_debt_payment)} sliderValue={sliderValue(form.existing_monthly_debt_payment, 0, DEBT_PAYMENT_MAX)} min={0} max={DEBT_PAYMENT_MAX} step={50_000} size={64} client="desktop" rightAddons="₽" steps={["0 ₽", formatCompactMoney(DEBT_PAYMENT_MAX / 2), formatCompactMoney(DEBT_PAYMENT_MAX)]} error={errors.existing_monthly_debt_payment} onChange={(_, payload) => updateRange("existing_monthly_debt_payment", payload.value)} onFocus={() => setFocusedRange("debt")} onBlur={() => finishRange("existing_monthly_debt_payment", 0, DEBT_PAYMENT_MAX)} dataTestId="application-debt-slider" /></div>
             {creditHints.length > 0 && <div className="credit-hints" role="status" aria-live="polite">{creditHints.map((hint) => <article className={`credit-hint credit-hint--${hint.severity}`} key={hint.title}><strong>{hint.title}</strong><span>{hint.text}</span></article>)}<small>Это подсказка, а не решение по кредиту. Банк проверит заявку и сообщит результат.</small></div>}
@@ -393,12 +400,12 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
   </div>;
 }
 
-function CreditSummary({ summary, rate }) {
+function CreditSummary({ summary, rate, approved = false }) {
   return <div className="credit-summary" aria-live="polite">
     <div><small>Платёж в месяц</small><strong>{formatMoney(summary.monthlyPayment)}</strong></div>
     <div><small>Всего выплат</small><strong>{formatMoney(summary.totalPayment)}</strong></div>
     <div><small>Переплата</small><strong>{formatMoney(summary.overpayment)}</strong></div>
-    <p>Расчёт по аннуитетной схеме и ставке {rate}% годовых. Точные условия определит банк после рассмотрения.</p>
+    <p>{approved ? `Платёж рассчитан по одобренным сумме и сроку, ставка ${rate}% годовых.` : `Расчёт по аннуитетной схеме и ставке ${rate}% годовых. Точные условия определит банк после рассмотрения.`}</p>
   </div>;
 }
 
@@ -433,7 +440,7 @@ function ApprovedConditions({ application }) {
       <span className="approval-terms__arrow" aria-label="Изменено на">→</span>
       <div className="approval-terms__side approval-terms__side--approved"><small>Одобрено</small><strong>{approvedAmount}</strong><span>{approvedTerm}</span><small>Ставка {formatPercent(Number(application.approved_annual_interest_rate) / 100)} годовых</small></div>
     </div>
-    <p className="approval-terms__note">Исходные параметры заявки сохранены в анкете ниже.</p>
+    <p className="approval-terms__note">Исходная заявка сохранена в истории. Параметры и расчёт платежа ниже соответствуют одобренным условиям.</p>
   </section>;
 }
 

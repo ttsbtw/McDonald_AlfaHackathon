@@ -77,7 +77,7 @@ export default function EmployeeWorkspace({ pathname, navigate }) {
   useEffect(() => { load(); }, [filter]);
   useEffect(() => { const timer = window.setInterval(() => { if (document.visibilityState === "visible") load(true); }, 5000); return () => window.clearInterval(timer); }, [filter]);
   const applicationMatch = pathname.match(/^\/employee\/applications\/([^/]+)$/);
-  if (applicationMatch) return <ApplicationReview id={applicationMatch[1]} onBack={() => { navigate("/employee/queue", { replace: true }); load(); }} unavailable={unavailable} />;
+  if (applicationMatch) return <ApplicationReview key={applicationMatch[1]} id={applicationMatch[1]} navigate={navigate} onBack={() => { navigate("/employee/queue", { replace: true }); load(); }} unavailable={unavailable} />;
   return <div className="content"><div className="employee-heading"><div><span className="eyebrow eyebrow--red">Рабочее место сотрудника</span><h1>Очередь заявок</h1><p>Рассмотрение, проверки и решение — в одной карточке.</p></div><div className="employee-metric"><span>В работе</span><b>{openCount}</b></div></div>
     {unavailable && <Alert title="Очередь временно недоступна">Сервер не вернул данные заявок. Попробуйте обновить список.</Alert>}
     {error && <><Alert type="error">{error}</Alert><Button variant="secondary" onClick={() => load()}>Повторить</Button></>}
@@ -86,10 +86,16 @@ export default function EmployeeWorkspace({ pathname, navigate }) {
   </div>;
 }
 
-function ApplicationReview({ id, onBack, unavailable }) {
+function ApplicationReview({ id, navigate, onBack, unavailable }) {
   const [record, setRecord] = useState(null);
   const [alternatives, setAlternatives] = useState(null);
   const [audit, setAudit] = useState(null);
+  const [history, setHistory] = useState(null);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyOffset, setHistoryOffset] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyMoreLoading, setHistoryMoreLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
   const [error, setError] = useState("");
   const [comment, setComment] = useState("");
   const [actionMode, setActionMode] = useState(null);
@@ -104,7 +110,21 @@ function ApplicationReview({ id, onBack, unavailable }) {
     } catch (err) { setError(err.message); }
     finally { if (!silent) setLoading(false); }
   }
+  async function loadHistory(companyId, offset = 0, append = false) {
+    if (append) setHistoryMoreLoading(true);
+    else { setHistoryLoading(true); setHistoryError(""); }
+    try {
+      const page = await api.bankCompanyHistory(companyId, 20, offset);
+      setHistory((current) => append ? [...(current || []), ...page.items] : page.items);
+      setHistoryTotal(page.total);
+      setHistoryOffset(offset + page.items.length);
+    } catch (err) { setHistoryError(err.message); }
+    finally { setHistoryLoading(false); setHistoryMoreLoading(false); }
+  }
   useEffect(() => { loadRecord(); }, [id, unavailable]);
+  useEffect(() => {
+    if (record?.company?.id) loadHistory(record.company.id);
+  }, [record?.company?.id, record?.status]);
   useEffect(() => { if (!record || ["APPROVED", "REJECTED"].includes(record.status)) return undefined; const timer = window.setInterval(() => { if (document.visibilityState === "visible") loadRecord(true); }, 5000); return () => window.clearInterval(timer); }, [id, record?.status, unavailable]);
   const assessment = record?.assessments?.[0];
   const complianceReview = latestComplianceReview(audit, assessment?.id);
@@ -132,6 +152,17 @@ function ApplicationReview({ id, onBack, unavailable }) {
     <section className="review-hero"><div><span className="eyebrow">Заявка {String(id).slice(0, 8)}</span><h1>{record.company?.name || "Компания"}</h1><p>{record.purpose || "Цель финансирования не указана"}</p></div><StatusBadge status={record.status} /></section>
     <section className="panel"><div className="panel-title"><div><span className="eyebrow eyebrow--red">Анкета</span><h2>Параметры и финансы</h2></div></div><dl className="facts facts--review"><div><dt>Сумма</dt><dd>{formatMoneyRub(record.requested_amount)}</dd></div><div><dt>Срок</dt><dd>{record.term_months ? `${record.term_months} мес.` : "—"}</dd></div><div><dt>Выручка</dt><dd>{record.average_monthly_revenue === null || record.average_monthly_revenue === undefined ? "—" : `${formatMoneyRub(record.average_monthly_revenue)}/мес.`}</dd></div><div><dt>Расходы</dt><dd>{record.average_monthly_operating_expenses === null || record.average_monthly_operating_expenses === undefined ? "—" : `${formatMoneyRub(record.average_monthly_operating_expenses)}/мес.`}</dd></div><div><dt>Текущие платежи</dt><dd>{record.existing_monthly_debt_payment === null || record.existing_monthly_debt_payment === undefined ? "—" : `${formatMoneyRub(record.existing_monthly_debt_payment)}/мес.`}</dd></div><div><dt>Продукт</dt><dd>{record.product?.name || record.product_code || "—"}</dd></div></dl></section>
     <DecisionOverview application={record} assessment={assessment} />
+    <CompanyHistoryPanel
+      items={history}
+      total={historyTotal}
+      loading={historyLoading}
+      moreLoading={historyMoreLoading}
+      error={historyError}
+      currentApplicationId={id}
+      onOpen={(applicationId) => navigate(`/employee/applications/${applicationId}`)}
+      onRetry={() => loadHistory(record.company.id)}
+      onLoadMore={() => loadHistory(record.company.id, historyOffset, true)}
+    />
     <ChecksPanel assessment={assessment} />
     <AssessmentSummary assessment={assessment} />
     {requiresComplianceReview(assessment) && <ComplianceReviewPanel application={record} review={complianceReview} busy={busy} onSaved={() => loadRecord(true)} setBusy={setBusy} setError={setError} />}
@@ -140,6 +171,28 @@ function ApplicationReview({ id, onBack, unavailable }) {
   </main><aside className="panel sticky-card decision-card"><span className="eyebrow">Итоговое решение</span><h3>{reviewOpen ? "Следующее действие" : finalDecision ? "Рассмотрение завершено" : "Ожидаем клиента"}</h3>
     {!reviewOpen ? <><StatusBadge status={record.status} /><p className="muted">{finalDecision ? "Итог зафиксирован. Действия по заявке завершены." : "Банк запросил сведения. Действия снова станут доступны после ответа клиента."}</p></> : actionMode ? <><Field label={actionMode === "info" ? "Какие сведения нужно предоставить клиенту?" : "Комментарий к отказу — необязательно"}><textarea rows="5" maxLength="1000" value={comment} onChange={(event) => setComment(event.target.value)} autoFocus /></Field><Button busy={busy} onClick={() => action(actionMode)}>{actionMode === "info" ? "Отправить запрос" : "Подтвердить отказ"}</Button><Button disabled={busy} variant="ghost" onClick={() => { setActionMode(null); setComment(""); setError(""); }}>Отмена</Button></> : <><Button busy={busy} disabled={Boolean(approvalReason)} onClick={() => action("approve")}>Одобрить</Button>{approvalReason && <p className="decision-card__reason">{approvalReason}</p>}<Button busy={busy} variant="secondary" onClick={() => { setComment(""); setActionMode("info"); }}>Запросить сведения</Button><Button busy={busy} variant="ghost" onClick={() => { setComment(""); setActionMode("reject"); }}>Отказать</Button></>}
   </aside></div></div>;
+}
+
+function CompanyHistoryPanel({ items, total, loading, moreLoading, error, currentApplicationId, onOpen, onRetry, onLoadMore }) {
+  return <section className="panel company-history">
+    <div className="panel-title"><div><span className="eyebrow eyebrow--red">Клиент</span><h2>История обращений</h2><p>Заявки компании и сохранённые результаты предыдущих рассмотрений.</p></div>{items && <span className="company-history__count">{total}</span>}</div>
+    {error && <><Alert type="error">{error}</Alert><Button variant="secondary" onClick={onRetry}>Повторить</Button></>}
+    {loading && !items ? <Skeleton rows={2} /> : items?.length ? <>
+      <ol className="company-history__list">{items.map((item) => <li key={item.id}>
+        <button type="button" disabled={item.id === currentApplicationId} onClick={() => onOpen(item.id)} aria-current={item.id === currentApplicationId ? "page" : undefined}>
+          <span className="company-history__top"><strong>{item.product?.name || item.product_code || "Кредитная заявка"}</strong><StatusBadge status={item.status} /></span>
+          <span className="company-history__dates">Создана {new Date(item.created_at).toLocaleDateString("ru-RU")}{item.submitted_at && ` · отправлена ${new Date(item.submitted_at).toLocaleDateString("ru-RU")}`}</span>
+          {item.purpose && <span className="company-history__purpose">{item.purpose}</span>}
+          <span className="company-history__terms"><span>Запрошено: {formatMoneyRub(item.requested_amount)} · {item.term_months || "—"} мес.</span>
+            {item.status === "APPROVED" && item.approved_amount !== null && item.approved_amount !== undefined && <strong>Одобрено: {formatMoneyRub(item.approved_amount)} · {item.approved_term_months} мес.</strong>}
+          </span>
+          <span className="company-history__score">Оценка: {item.score === null || item.score === undefined ? "нет" : `${item.score}/100`} · риск {riskLabels[item.approved_risk_level || item.risk_level] || "не определён"}{item.id === currentApplicationId && <b>Текущая заявка</b>}</span>
+          <i aria-hidden="true">→</i>
+        </button>
+      </li>)}</ol>
+      {items.length < total && <Button variant="secondary" busy={moreLoading} onClick={onLoadMore}>Показать ещё обращения</Button>}
+    </> : !error && <EmptyState icon="◷" title="Предыдущих обращений нет">Это первое отправленное обращение компании.</EmptyState>}
+  </section>;
 }
 
 function DecisionOverview({ application, assessment }) {
