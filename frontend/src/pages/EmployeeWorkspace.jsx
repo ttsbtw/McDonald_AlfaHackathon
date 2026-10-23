@@ -25,7 +25,15 @@ function ApplicationReview({ id, onBack, unavailable }) {
   async function generateAlternatives() {
     setBusy(true); setError("");
     try { setAlternatives(await api.generateAlternatives(id)); }
-    catch (err) { setError(err.message); }
+    catch (err) {
+      if (err.code === "ASSESSMENT_CONTEXT_UNAVAILABLE") {
+        setAlternatives({
+          status: "BLOCKED",
+          reason: "Эта оценка создана до сохранения отчётов БКИ и Compliance. Для безопасного подбора клиенту нужно отправить актуальную заявку заново.",
+          alternatives: [],
+        });
+      } else setError(err.message);
+    }
     finally { setBusy(false); }
   }
   async function sendAlternative(offerId) {
@@ -50,11 +58,19 @@ function ApplicationReview({ id, onBack, unavailable }) {
 
 function AlternativePanel({ application, alternativeSet, busy, onGenerate, onOffer }) {
   const result = application.assessments?.[0]?.result || {};
+  const hardStops = result.hard_stops || [];
+  const underwritingRules = result.underwriting?.rules || [];
+  const debtBurdenExceeded = hardStops.includes("EXCESSIVE_DEBT_BURDEN")
+    || underwritingRules.some((rule) => rule.code === "DEBT_BURDEN" && rule.outcome === "REJECT");
+  const bki = result.check_reports?.bki;
+  const currentOverdue = Number(bki?.current_overdue_amount || 0);
+  const overdueStop = hardStops.includes("CURRENT_OVERDUE") || hardStops.includes("SEVERE_OVERDUE_HISTORY");
   const generated = alternativeSet?.status && alternativeSet.status !== "NOT_GENERATED";
   const accepted = alternativeSet?.alternatives?.find((item) => item.status === "ACCEPTED");
   const activeOffer = alternativeSet?.active_offer;
   const canGenerate = application.status === "UNDER_REVIEW" && !accepted && !activeOffer;
-  return <section className="panel alternatives"><div className="alternatives__heading"><div><h2>Альтернативные условия</h2><p>Расчётные варианты не являются одобрением. Итоговое решение принимает сотрудник.</p></div>{canGenerate && <Button busy={busy} variant="secondary" onClick={onGenerate}>{generated ? "Пересчитать варианты" : "Рассчитать варианты"}</Button>}</div>
+  return <section className="panel alternatives"><div className="alternatives__heading"><div><h2>Альтернативные условия</h2><p>Клиент запрашивает кредит на {formatMoneyValue(application.requested_amount)} ₽ сроком {application.term_months} мес.</p><p>{debtBurdenExceeded ? "Система выявила превышение допустимой долговой нагрузки. Если остальные обязательные проверки это позволяют, она предложит меньшую сумму или более долгий срок." : "Система проверит, можно ли снизить ежемесячную нагрузку меньшей суммой или более долгим сроком."}</p><small>Расчётные варианты не являются одобрением. Итоговое решение принимает сотрудник.</small></div>{canGenerate && <Button busy={busy} variant="secondary" onClick={onGenerate}>{generated ? "Пересчитать варианты" : "Рассчитать варианты"}</Button>}</div>
+    {(currentOverdue > 0 || overdueStop) && <Alert title="Просрочка в БКИ не устраняется изменением условий">Система не предложит альтернативу, пока не будет проверена текущая или длительная просрочка.</Alert>}
     {accepted && <Alert title="Клиент принял условия">Можно принять итоговое решение по сумме {formatMoneyValue(accepted.amount)} ₽ на {accepted.term_months} мес.</Alert>}
     {activeOffer && <Alert title="Предложение отправлено клиенту">Ожидаем ответ по сумме {formatMoneyValue(activeOffer.amount)} ₽ на {activeOffer.term_months} мес.</Alert>}
     {generated && !alternativeSet.alternatives?.length && <p className="muted">{alternativeSet.reason || "Подходящие варианты не найдены."}</p>}
