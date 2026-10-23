@@ -49,6 +49,12 @@ def integer(value, minimum, maximum):
     return value
 
 
+def boolean(value):
+    if type(value) is not bool:
+        raise ValueError("Ожидается логическое значение.")
+    return value
+
+
 def text_value(value):
     if not isinstance(value, str) or not value.strip() or len(value) > 200:
         raise ValueError("Ожидается непустая строка длиной до 200 символов.")
@@ -106,7 +112,12 @@ def validate_input(raw):
         **{name: money for name in MONEY_FIELDS},
         "max_overdue_days_12m": lambda v: integer(v, 0, 366),
     }
+    if isinstance(raw, dict) and "credit_history_available" in raw:
+        validators["credit_history_available"] = boolean
     parsed, errors = validate_fields(raw, validators)
+    if isinstance(raw, dict) and "credit_history_available" in raw:
+        if type(raw["credit_history_available"]) is not bool:
+            errors.append(issue("credit_history_available", "INVALID", "Ожидается логическое значение."))
     if parsed.get("requested_amount") == 0:
         errors.append(issue("requested_amount", "INVALID", "Сумма кредита должна быть положительной."))
     if "registration_date" in parsed and "as_of_date" in parsed:

@@ -128,6 +128,41 @@ class Assessment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class AuditLog(Base):
+    """Append-only, analytics-ready record of checks and scoring pipeline steps."""
+    __tablename__ = "audit_logs"
+    __table_args__ = (
+        Index("ix_audit_logs_application_created", "application_id", "created_at", "id"),
+        Index("ix_audit_logs_client_created", "client_identifier", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    application_id: Mapped[UUID] = mapped_column(ForeignKey("applications.id", ondelete="CASCADE"))
+    client_identifier: Mapped[str] = mapped_column(String(64))
+    actor_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(48))
+    source: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ComplianceReview(Base):
+    """Append-only employee resolution of a synthetic compliance match."""
+    __tablename__ = "compliance_reviews"
+    __table_args__ = (
+        Index("ix_compliance_reviews_application_created", "application_id", "created_at", "id"),
+        CheckConstraint("outcome IN ('CLEAR', 'CONFIRMED_MATCH')", name="ck_compliance_review_outcome"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    application_id: Mapped[UUID] = mapped_column(ForeignKey("applications.id", ondelete="CASCADE"))
+    assessment_id: Mapped[UUID] = mapped_column(ForeignKey("assessments.id"))
+    employee_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    outcome: Mapped[str] = mapped_column(String(20))
+    comment: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class ApplicationEvent(Base):
     """Append-only audit trail of application edits and state transitions."""
     __tablename__ = "application_events"
