@@ -179,7 +179,7 @@ function CompanyHistoryPanel({ items, total, loading, moreLoading, error, curren
     {error && <><Alert type="error">{error}</Alert><Button variant="secondary" onClick={onRetry}>Повторить</Button></>}
     {loading && !items ? <Skeleton rows={2} /> : items?.length ? <>
       <ol className="company-history__list">{items.map((item) => <li key={item.id}>
-        <button type="button" onClick={() => onOpen(item.id)} aria-current={item.id === currentApplicationId ? "page" : undefined}>
+        <button type="button" disabled={item.id === currentApplicationId} onClick={() => onOpen(item.id)} aria-current={item.id === currentApplicationId ? "page" : undefined}>
           <span className="company-history__top"><strong>{item.product?.name || item.product_code || "Кредитная заявка"}</strong><StatusBadge status={item.status} /></span>
           <span className="company-history__dates">Создана {new Date(item.created_at).toLocaleDateString("ru-RU")}{item.submitted_at && ` · отправлена ${new Date(item.submitted_at).toLocaleDateString("ru-RU")}`}</span>
           {item.purpose && <span className="company-history__purpose">{item.purpose}</span>}
