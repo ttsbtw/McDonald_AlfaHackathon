@@ -58,6 +58,14 @@ function BankApplicationRisk({ item }) {
   return <span className={`risk risk--${String(item.risk_level || "unknown").toLowerCase()}`}>{riskLabels[item.risk_level] || "—"}</span>;
 }
 
+function ApplicationTable({ title, items, navigate }) {
+  if (!items.length) return null;
+  return <section className="bank-queue-section" aria-label={`${title}: ${items.length}`}>
+    <div className="bank-queue-section__heading"><h2>{title}</h2><span>{items.length}</span></div>
+    <div className="bank-table"><div className="bank-table__head"><span>Клиент и цель</span><span>Сумма</span><span>Риск</span><span>Статус</span><span /></div>{items.map((item) => <button key={item.id} onClick={() => navigate(`/employee/applications/${item.id}`)}><span><b>{item.company?.name || "Компания"}</b><small>{item.purpose || "Цель не указана"}</small></span><BankApplicationAmount item={item} /><BankApplicationRisk item={item} /><StatusBadge status={item.status} /><i>→</i></button>)}</div>
+  </section>;
+}
+
 export default function EmployeeWorkspace({ pathname, navigate }) {
   const [filter, setFilter] = useState("");
   const [items, setItems] = useState(null);
@@ -81,11 +89,13 @@ export default function EmployeeWorkspace({ pathname, navigate }) {
   useEffect(() => { const timer = window.setInterval(() => { if (document.visibilityState === "visible") load(true); }, 5000); return () => window.clearInterval(timer); }, [filter]);
   const applicationMatch = pathname.match(/^\/employee\/applications\/([^/]+)$/);
   if (applicationMatch) return <ApplicationReview key={applicationMatch[1]} id={applicationMatch[1]} navigate={navigate} onBack={() => { navigate("/employee/queue", { replace: true }); load(); }} unavailable={unavailable} />;
+  const waitingItems = (items || []).filter((item) => ["SUBMITTED", "UNDER_REVIEW", "NEEDS_INFO"].includes(item.status));
+  const reviewedItems = (items || []).filter((item) => !["SUBMITTED", "UNDER_REVIEW", "NEEDS_INFO"].includes(item.status));
   return <div className="content"><div className="employee-heading"><div><span className="eyebrow eyebrow--red">Рабочее место сотрудника</span><h1>Очередь заявок</h1><p>Рассмотрение, проверки и решение — в одной карточке.</p></div><div className="employee-metric"><span>В работе</span><b>{openCount}</b></div></div>
     {unavailable && <Alert title="Очередь временно недоступна">Сервер не вернул данные заявок. Попробуйте обновить список.</Alert>}
     {error && <><Alert type="error">{error}</Alert><Button variant="secondary" onClick={() => load()}>Повторить</Button></>}
     <div className="filters">{filters.map((status) => <button key={status || "all"} className={filter === status ? "is-active" : ""} onClick={() => setFilter(status)}>{status ? <StatusBadge status={status} /> : "Все"}</button>)}</div>
-    {items === null ? <Skeleton rows={5} /> : items.length ? <div className="bank-table"><div className="bank-table__head"><span>Клиент и цель</span><span>Сумма</span><span>Риск</span><span>Статус</span><span /></div>{items.map((item) => <button key={item.id} onClick={() => navigate(`/employee/applications/${item.id}`)}><span><b>{item.company?.name || "Компания"}</b><small>{item.purpose || "Цель не указана"}</small></span><BankApplicationAmount item={item} /><BankApplicationRisk item={item} /><StatusBadge status={item.status} /><i>→</i></button>)}</div> : <EmptyState icon="✓" title={unavailable ? "Ожидаем API обработки" : "В очереди пусто"}>Новых заявок с выбранным статусом нет.</EmptyState>}
+    {items === null ? <Skeleton rows={5} /> : items.length ? <div className="bank-queue">{waitingItems.length > 0 && <ApplicationTable title="В работе" items={waitingItems} navigate={navigate} />}<ApplicationTable title="Рассмотрены" items={reviewedItems} navigate={navigate} /></div> : <EmptyState icon="✓" title={unavailable ? "Ожидаем API обработки" : "В очереди пусто"}>Новых заявок с выбранным статусом нет.</EmptyState>}
   </div>;
 }
 
