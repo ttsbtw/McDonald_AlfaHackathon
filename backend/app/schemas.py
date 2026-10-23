@@ -97,6 +97,7 @@ class DraftOut(DraftFields):
     approved_amount: PositiveMoney | None = None
     approved_term_months: Term | None = None
     approved_annual_interest_rate: Decimal | None = None
+    has_pending_alternative_offer: bool = False
 
     @field_validator("created_at", "updated_at")
     @classmethod

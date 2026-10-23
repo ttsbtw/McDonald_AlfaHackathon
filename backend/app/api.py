@@ -164,8 +164,9 @@ def approved_alternative_risks_by_application(db, items):
     return latest
 
 
-def client_application_out(item, approved_action=None):
+def client_application_out(item, approved_action=None, has_pending_alternative_offer=False):
     payload = DraftOut.model_validate(item).model_dump()
+    payload["has_pending_alternative_offer"] = has_pending_alternative_offer
     if approved_action is not None:
         payload.update(
             approved_amount=approved_action.approved_amount,
@@ -201,9 +202,28 @@ def list_drafts(db: DB, user: Client,
     items = db.scalars(query.order_by(Application.created_at.desc(), Application.id)
                        .limit(limit).offset(offset)).all()
     approved_actions = approved_actions_by_application(db, items)
+    application_ids = [item.id for item in items]
+    latest_assessment_id = (
+        select(Assessment.id)
+        .where(Assessment.application_id == AlternativeOffer.application_id)
+        .order_by(Assessment.application_revision.desc())
+        .limit(1)
+        .correlate(AlternativeOffer)
+        .scalar_subquery()
+    )
+    pending_offer_ids = set(db.scalars(
+        select(AlternativeOffer.application_id).where(
+            AlternativeOffer.application_id.in_(application_ids),
+            AlternativeOffer.status == "OFFERED",
+            AlternativeOffer.assessment_id == latest_assessment_id,
+        )
+    ).all()) if application_ids else set()
     total = db.scalar(select(func.count()).select_from(Application).where(Application.owner_id == user.id))
     return {
-        "items": [client_application_out(item, approved_actions.get(item.id)) for item in items],
+        "items": [
+            client_application_out(item, approved_actions.get(item.id), item.id in pending_offer_ids)
+            for item in items
+        ],
         "total": total, "limit": limit, "offset": offset,
     }
 

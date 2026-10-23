@@ -270,6 +270,10 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
       if (document.visibilityState !== "visible") return;
       try {
         const current = await api.application(saved.id);
+        if (current.status === "UNDER_REVIEW") {
+          const offer = await api.applicationAlternativeOffer(saved.id).catch(() => null);
+          setAlternativeOffer(offer);
+        }
         if (current.status !== saved.status || current.revision !== saved.revision) {
           setSaved(current);
           setForm(withFinancialDefaults(current));
@@ -362,7 +366,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
     } finally { setBusy(false); }
   }
 
-  return <div className="content content--form"><button className="back-link" onClick={onClose}>← К заявкам</button><div className="page-heading"><div><span className="eyebrow eyebrow--red">{heading.eyebrow}</span><h1>{heading.title}</h1>{saved && <StatusBadge status={status} />}<p>{readOnly ? (status === "APPROVED" ? "Заявка одобрена. Ниже сохранены итог и данные отправленной анкеты." : status === "REJECTED" ? "По заявке принято решение об отказе. Ниже сохранены данные отправленной анкеты." : "Заявка отправлена и ожидает решения. Изменения пока недоступны.") : "Известные банку сведения уже заполнены. Добавьте только показатели для оценки."}</p></div><span className="big-number">{heading.number}</span></div>
+  return <div className="content content--form"><button className="back-link" onClick={onClose}>← К заявкам</button><div className="page-heading"><div><span className="eyebrow eyebrow--red">{heading.eyebrow}</span><h1>{heading.title}</h1>{saved && <><StatusBadge status={status} />{alternativeOffer?.status === "OFFERED" && <span className="status status--offer">Нужно ваше решение</span>}</>}<p>{readOnly ? (status === "APPROVED" ? "Заявка одобрена. Ниже сохранены итог и данные отправленной анкеты." : status === "REJECTED" ? "По заявке принято решение об отказе. Ниже сохранены данные отправленной анкеты." : "Заявка отправлена и ожидает решения. Изменения пока недоступны.") : "Известные банку сведения уже заполнены. Добавьте только показатели для оценки."}</p></div><span className="big-number">{heading.number}</span></div>
     {notice && <Alert type={noticeType}>{notice}</Alert>}
     {status === "NEEDS_INFO" && <Alert title="Банк запросил уточнения">{infoRequest.loading ? "Загружаем сообщение сотрудника…" : infoRequest.error ? `Не удалось загрузить сообщение: ${infoRequest.error}` : infoRequest.message || "В истории нет текста запроса. Свяжитесь с сотрудником банка, чтобы уточнить, какие сведения нужно добавить."}</Alert>}
     {status === "REJECTED" && <Alert title="Комментарий банка">{infoRequest.loading ? "Загружаем сообщение сотрудника…" : infoRequest.error ? `Не удалось загрузить сообщение: ${infoRequest.error}` : infoRequest.message || "Сотрудник не добавил комментарий к решению."}</Alert>}
@@ -452,7 +456,7 @@ function ClientAlternativeCard({ offer, busy, onDecision }) {
 
 function Dashboard({ company, applications, onNew, onOpen }) {
   return <div className="content"><section className="client-hero"><div><span className="eyebrow">Кабинет предпринимателя</span><h1>Здравствуйте,<br />{company.name}</h1><p>Подберите финансирование и следите за решением без звонков и визитов.</p><Button onClick={onNew}>Подобрать финансирование</Button></div><div className="hero-shape" aria-hidden="true"><b>₽</b><i /><i /></div></section>
-    <section className="dashboard-section"><div className="section-title"><div><span className="eyebrow eyebrow--red">Мои заявки</span><h2>История финансирования</h2></div><span>{applications.length}</span></div>{applications.length ? <div className="application-list">{applications.map((item) => <button key={item.id} onClick={() => onOpen(item)}><div><StatusBadge status={item.status} /><h3>{item.purpose || "Заявка без названия"}</h3><ApplicationTerms item={item} compact /></div><div><small>Обновлена</small><b>{new Date(item.updated_at).toLocaleDateString("ru-RU")}</b><i>→</i></div></button>)}</div> : <EmptyState icon="₽" title="Заявок пока нет" action={<Button onClick={onNew}>Начать подбор</Button>}>Начните с потребности — сумму, срок и продукт подберём на следующем шаге.</EmptyState>}</section>
+    <section className="dashboard-section"><div className="section-title"><div><span className="eyebrow eyebrow--red">Мои заявки</span><h2>История финансирования</h2></div><span>{applications.length}</span></div>{applications.length ? <div className="application-list">{applications.map((item) => <button key={item.id} onClick={() => onOpen(item)}><div className="application-list__summary"><span className="application-list__badges"><StatusBadge status={item.status} />{item.has_pending_alternative_offer && <span className="status status--offer">Нужно ваше решение</span>}</span><h3>{item.purpose || "Заявка без названия"}</h3><ApplicationTerms item={item} compact /></div><div><small>Обновлена</small><b>{new Date(item.updated_at).toLocaleDateString("ru-RU")}</b><i>→</i></div></button>)}</div> : <EmptyState icon="₽" title="Заявок пока нет" action={<Button onClick={onNew}>Начать подбор</Button>}>Начните с потребности — сумму, срок и продукт подберём на следующем шаге.</EmptyState>}</section>
   </div>;
 }
 
