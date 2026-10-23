@@ -1,7 +1,7 @@
 """Generate safe, deterministic alternatives from a submitted assessment."""
 
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 
 from ..scoring import assess_application
 from ..scoring.scorecard import calculate_monthly_payment
@@ -113,7 +113,10 @@ def generate_alternatives(*, input_data: dict, product_policy: dict, checks: lis
                                             available_payment=available_payment, annual_interest_rate=rate)
         if affordable < minimum:
             continue
-        amount = min(desired_amount, affordable).quantize(Decimal("0.01"))
+        # Score whole-ruble candidates and stay below the affordable payment ceiling.
+        amount = min(desired_amount, affordable).quantize(Decimal("1"), rounding=ROUND_DOWN)
+        if amount < minimum:
+            continue
         if amount == original_amount and term == original_term:
             continue
 

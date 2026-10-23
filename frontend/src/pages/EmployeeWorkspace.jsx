@@ -10,14 +10,19 @@ function hasChangedApprovedTerms(item) {
       || Number(item.approved_term_months) !== Number(item.term_months));
 }
 
+function formatAlternativeMoneyValue(value) {
+  if (value === null || value === undefined || value === "" || !Number.isFinite(Number(value))) return "—";
+  return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(Number(value));
+}
+
 function BankApplicationAmount({ item }) {
   if (!hasChangedApprovedTerms(item)) {
     return <strong>{item.requested_amount ? `${Number(item.requested_amount).toLocaleString("ru-RU")} ₽` : "—"}</strong>;
   }
   return <span className="bank-table__amount-change">
-    <s>{Number(item.requested_amount).toLocaleString("ru-RU")} ₽ · {item.term_months} мес.</s>
+    <s>{formatAlternativeMoneyValue(item.requested_amount)} ₽ · {item.term_months} мес.</s>
     <b aria-hidden="true">→</b>
-    <span><strong>{Number(item.approved_amount).toLocaleString("ru-RU")} ₽</strong><small>{item.approved_term_months} мес.</small></span>
+    <span><strong>{formatAlternativeMoneyValue(item.approved_amount)} ₽</strong><small>{item.approved_term_months} мес.</small></span>
   </span>;
 }
 
@@ -96,10 +101,10 @@ function AlternativePanel({ application, alternativeSet, busy, onGenerate, onOff
   const canGenerate = application.status === "UNDER_REVIEW" && !accepted && !activeOffer;
   return <section className="panel alternatives"><div className="alternatives__heading"><div><h2>Альтернативные условия</h2><p>Клиент запрашивает кредит на {formatMoneyValue(application.requested_amount)} ₽ сроком {application.term_months} мес.</p><p>{debtBurdenExceeded ? "Система выявила превышение допустимой долговой нагрузки. Если остальные обязательные проверки это позволяют, она предложит меньшую сумму или более долгий срок." : "Система проверит, можно ли снизить ежемесячную нагрузку меньшей суммой или более долгим сроком."}</p><small>Расчётные варианты не являются одобрением. Итоговое решение принимает сотрудник.</small></div>{canGenerate && <Button busy={busy} variant="secondary" onClick={onGenerate}>{generated ? "Пересчитать варианты" : "Рассчитать варианты"}</Button>}</div>
     {(currentOverdue > 0 || overdueStop) && <Alert title="Просрочка в БКИ не устраняется изменением условий">Система не предложит альтернативу, пока не будет проверена текущая или длительная просрочка.</Alert>}
-    {accepted && <Alert title="Клиент принял условия">Можно принять итоговое решение по сумме {formatMoneyValue(accepted.amount)} ₽ на {accepted.term_months} мес.</Alert>}
+    {accepted && <Alert title="Клиент принял условия">Можно принять итоговое решение по сумме {formatAlternativeMoneyValue(accepted.amount)} ₽ на {accepted.term_months} мес.</Alert>}
     {activeOffer && <Alert title="Предложение отправлено клиенту">Ожидаем ответ по сумме {formatMoneyValue(activeOffer.amount)} ₽ на {activeOffer.term_months} мес.</Alert>}
     {generated && !alternativeSet.alternatives?.length && <p className="muted">{alternativeSet.reason || "Подходящие варианты не найдены."}</p>}
-    {alternativeSet?.alternatives?.length > 0 && <div className="alternatives__list">{alternativeSet.alternatives.map((item) => <article className="alternative-card" key={item.id}><div className="alternative-card__top"><strong>{formatMoneyValue(item.amount)} ₽</strong><span>{item.term_months} мес.</span></div><dl><div><dt>Ставка</dt><dd>{formatCalcPercent(Number(item.annual_interest_rate) / 100)}</dd></div><div><dt>Платёж в месяц</dt><dd>{formatMoneyValue(item.monthly_payment)} ₽</dd></div><div><dt>Долговая нагрузка</dt><dd>{formatCalcPercent(item.debt_burden)}</dd></div></dl><p>{item.reason}</p><small>Скоринг: {recommendationLabels[item.evaluation?.scoring?.recommendation] || "—"}; underwriting: {item.evaluation?.underwriting?.status || "—"}.</small>{item.status === "GENERATED" && <Button busy={busy} onClick={() => onOffer(item.id)}>Предложить клиенту</Button>}{item.status === "OFFERED" && <span className="alternative-status">Ожидает ответа</span>}{item.status === "ACCEPTED" && <span className="alternative-status alternative-status--accepted">Клиент принял</span>}{item.status === "DECLINED" && <span className="alternative-status">Клиент отказался</span>}</article>)}</div>}
+    {alternativeSet?.alternatives?.length > 0 && <div className="alternatives__list">{alternativeSet.alternatives.map((item) => <article className="alternative-card" key={item.id}><div className="alternative-card__top"><strong>{formatAlternativeMoneyValue(item.amount)} ₽</strong><span>{item.term_months} мес.</span></div><dl><div><dt>Ставка</dt><dd>{formatCalcPercent(Number(item.annual_interest_rate) / 100)}</dd></div><div><dt>Платёж в месяц</dt><dd>{formatAlternativeMoneyValue(item.monthly_payment)} ₽</dd></div><div><dt>Долговая нагрузка</dt><dd>{formatCalcPercent(item.debt_burden)}</dd></div></dl><p>{item.reason}</p><small>Скоринг: {recommendationLabels[item.evaluation?.scoring?.recommendation] || "—"}; underwriting: {item.evaluation?.underwriting?.status || "—"}.</small>{item.status === "GENERATED" && <Button busy={busy} onClick={() => onOffer(item.id)}>Предложить клиенту</Button>}{item.status === "OFFERED" && <span className="alternative-status">Ожидает ответа</span>}{item.status === "ACCEPTED" && <span className="alternative-status alternative-status--accepted">Клиент принял</span>}{item.status === "DECLINED" && <span className="alternative-status">Клиент отказался</span>}</article>)}</div>}
     {!generated && result.underwriting?.status !== "PASS" && application.status === "UNDER_REVIEW" && <p className="muted">Можно проверить, устраняются ли причины отказа изменением суммы или срока.</p>}
     {accepted && <AcceptedAlternativeReview application={application} offer={accepted} originalAssessment={application.assessments?.[0]} />}
   </section>;
@@ -150,9 +155,9 @@ function AcceptedAlternativeReview({ application, offer, originalAssessment }) {
     <section className="panel accepted-review">
       <div className="accepted-review__heading"><span className="eyebrow eyebrow--red">Клиент принял предложение</span><h2>Новые условия для итогового решения</h2><p>Сотрудник увидит исходные условия и вариант, который выбрал клиент.</p></div>
       <div className="accepted-review__comparison">
-        <div className="accepted-review__side accepted-review__side--original"><small>Исходная заявка</small><strong><s>{formatMoneyValue(application.requested_amount)} ₽</s></strong><span><s>{application.term_months} мес.</s></span><dl><div><dt>Ежемесячный платёж</dt><dd><s>{formatMoneyValue(originalPayment)} ₽</s></dd></div><div><dt>Долговая нагрузка</dt><dd><s>{formatCalcPercent(originalBurden)}</s></dd></div><div><dt>Балл</dt><dd><s>{original.score ?? "—"} / 100</s></dd></div></dl></div>
+        <div className="accepted-review__side accepted-review__side--original"><small>Исходная заявка</small><strong><s>{formatAlternativeMoneyValue(application.requested_amount)} ₽</s></strong><span><s>{application.term_months} мес.</s></span><dl><div><dt>Ежемесячный платёж</dt><dd><s>{formatAlternativeMoneyValue(originalPayment)} ₽</s></dd></div><div><dt>Долговая нагрузка</dt><dd><s>{formatCalcPercent(originalBurden)}</s></dd></div><div><dt>Балл</dt><dd><s>{original.score ?? "—"} / 100</s></dd></div></dl></div>
         <span className="accepted-review__arrow" aria-hidden="true">→</span>
-        <div className="accepted-review__side accepted-review__side--accepted"><small>Принятый вариант</small><strong>{formatMoneyValue(offer.amount)} ₽</strong><span>{offer.term_months} мес.</span><dl><div><dt>Ежемесячный платёж</dt><dd>{formatMoneyValue(offer.monthly_payment)} ₽</dd></div><div><dt>Долговая нагрузка</dt><dd>{formatCalcPercent(offer.debt_burden)}</dd></div><div><dt>Балл после пересчёта</dt><dd>{rescored.score ?? "—"} / 100</dd></div></dl><small>Ставка {formatCalcPercent(Number(offer.annual_interest_rate) / 100)} годовых</small></div>
+        <div className="accepted-review__side accepted-review__side--accepted"><small>Принятый вариант</small><strong>{formatAlternativeMoneyValue(offer.amount)} ₽</strong><span>{offer.term_months} мес.</span><dl><div><dt>Ежемесячный платёж</dt><dd>{formatAlternativeMoneyValue(offer.monthly_payment)} ₽</dd></div><div><dt>Долговая нагрузка</dt><dd>{formatCalcPercent(offer.debt_burden)}</dd></div><div><dt>Балл после пересчёта</dt><dd>{rescored.score ?? "—"} / 100</dd></div></dl><small>Ставка {formatCalcPercent(Number(offer.annual_interest_rate) / 100)} годовых</small></div>
       </div>
     </section>
     <AssessmentSummary assessment={rescoredAssessment} title="Скоринг по принятым условиям" />
