@@ -52,6 +52,31 @@ async function request(path, options = {}) {
   return payload;
 }
 
+async function download(path, filename) {
+  const headers = new Headers();
+  const token = getToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  let response;
+  try {
+    response = await fetch(`${API_ROOT}${path}`, { headers });
+  } catch {
+    throw new ApiError(0, { code: "NETWORK_ERROR", message: "Сервер недоступен. Не удалось скачать журнал." });
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new ApiError(response.status, payload?.error);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 export const api = {
   async login(username, password) {
     const body = new URLSearchParams({ username, password });
@@ -86,6 +111,15 @@ export const api = {
   bankApplications: (status = "") => request(`/bank/applications${status ? `?status=${status}` : ""}`),
   bankApplication: (id) => request(`/bank/applications/${id}`),
   bankAssessments: (id) => request(`/bank/applications/${id}/assessments`),
+  bankAudit: (id) => request(`/bank/applications/${id}/audit?format=json`),
+  downloadBankAudit: (id, format) => download(
+    `/bank/applications/${id}/audit?format=${format}`,
+    `application-${id}-audit.${format}`,
+  ),
+  complianceReview: (id, data) => request(`/bank/applications/${id}/compliance-review`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  }),
   bankAlternatives: (id) => request(`/bank/applications/${id}/alternatives`),
   generateAlternatives: (id) => request(`/bank/applications/${id}/alternatives/generate`, { method: "POST" }),
   offerAlternative: (id, offerId) => request(`/bank/applications/${id}/alternatives/${offerId}/offer`, { method: "POST" }),
