@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { calculateCreditSummary, digitsOnly, draftPayload, matchProduct, validateApplication, validateNeed } from "../src/domain/application.js";
+import { calculateCreditSummary, digitsOnly, draftPayload, matchProduct, normalizeRangeValue, validateApplication, validateNeed } from "../src/domain/application.js";
 
 const product = { code: "equipment", min_amount: "300000.00", max_amount: "10000000.00", min_term_months: 6, max_term_months: 60 };
 
@@ -49,5 +49,18 @@ test("credit summary calculates annuity payment and total", () => {
 test("numeric input removes formatting and non-digits", () => {
   assert.equal(digitsOnly("5 100 000 ₽"), "5100000");
   assert.equal(digitsOnly("abc"), "");
+});
+
+test("range input is clamped to the visible boundaries", () => {
+  assert.equal(normalizeRangeValue("25 000 000", 300_000, 10_000_000), "10000000");
+  assert.equal(normalizeRangeValue("1", 6, 60), "6");
+  assert.equal(normalizeRangeValue("", 0, 5_000_000), "");
+});
+
+test("application validation follows selected product boundaries", () => {
+  const form = { product_code: "equipment", requested_amount: "200000", term_months: "72", purpose: "Станок", average_monthly_revenue: "500000", average_monthly_operating_expenses: "250000", existing_monthly_debt_payment: "0" };
+  const errors = validateApplication(form, product);
+  assert.match(errors.requested_amount, /300000/);
+  assert.match(errors.term_months, /60/);
 });
 

@@ -19,6 +19,14 @@ export function digitsOnly(value) {
   return String(value ?? "").replace(/\D/g, "");
 }
 
+export function normalizeRangeValue(value, min, max) {
+  const digits = digitsOnly(value);
+  if (!digits) return "";
+  const number = Number(digits);
+  if (!Number.isFinite(number)) return "";
+  return String(Math.min(Number(max), Math.max(Number(min), number)));
+}
+
 export function calculateCreditSummary(amountValue, termValue, annualRateValue) {
   const amount = toNumber(amountValue);
   const term = toNumber(termValue);
@@ -72,7 +80,7 @@ export function validateNeed(need) {
   return errors;
 }
 
-export function validateApplication(form) {
+export function validateApplication(form, product = null) {
   const errors = {};
   for (const field of ["product_code", "requested_amount", "term_months", "purpose",
     "average_monthly_revenue", "average_monthly_operating_expenses", "existing_monthly_debt_payment"]) {
@@ -86,6 +94,21 @@ export function validateApplication(form) {
   const term = toNumber(form.term_months);
   if (form.term_months !== "" && (!Number.isInteger(term) || term < 1 || term > 360)) {
     errors.term_months = "Укажите целое число от 1 до 360";
+  }
+  if (product && !errors.requested_amount) {
+    const min = toNumber(product.min_amount);
+    const max = toNumber(product.max_amount);
+    const amount = toNumber(form.requested_amount);
+    if (amount < min || amount > max) {
+      errors.requested_amount = `Укажите сумму от ${min} до ${max} ₽`;
+    }
+  }
+  if (product && !errors.term_months) {
+    const min = Number(product.min_term_months);
+    const max = Number(product.max_term_months);
+    if (term < min || term > max) {
+      errors.term_months = `Укажите срок от ${min} до ${max} месяцев`;
+    }
   }
   return errors;
 }

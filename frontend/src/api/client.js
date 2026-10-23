@@ -33,7 +33,7 @@ async function request(path, options = {}) {
   } catch {
     throw new ApiError(0, {
       code: "NETWORK_ERROR",
-      message: "Сервер недоступен. Проверьте, что backend запущен.",
+      message: "Сервер недоступен. Проверьте, что приложение запущено.",
     });
   }
 
@@ -46,7 +46,7 @@ async function request(path, options = {}) {
     }
     throw new ApiError(response.status, payload?.error || (response.status >= 500 ? {
       code: "SERVER_UNAVAILABLE",
-      message: "Сервер временно недоступен. Попробуйте ещё раз после запуска backend.",
+      message: "Сервер временно недоступен. Попробуйте ещё раз через несколько секунд.",
     } : null));
   }
   return payload;
