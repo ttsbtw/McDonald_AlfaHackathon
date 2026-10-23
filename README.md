@@ -87,6 +87,12 @@ docker compose ps
 docker compose down
 ```
 
+Удалить данные из базы не перезапуская контейнер можно этой командой:
+
+```sh
+docker compose exec -T db psql -U credit_cabinet -d credit_cabinet -c 'TRUNCATE TABLE applications RESTART IDENTITY CASCADE;'
+```
+
 Данные PostgreSQL хранятся в Docker-томе и сохраняются при обычной остановке. Не используйте `docker compose down -v`, если хотите сохранить их. После получения новых изменений из GitHub пересоберите и запустите сервисы командой `docker compose up --build -d`.
 
 ## Организация разработки
