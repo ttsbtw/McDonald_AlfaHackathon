@@ -73,11 +73,18 @@ export const api = {
     body: JSON.stringify(data),
   }),
   deleteApplication: (id) => request(`/applications/${id}`, { method: "DELETE" }),
-  submitApplication: (id) => request(`/applications/${id}/submit`, { method: "POST" }),
+  submitApplication: (id, data) => request(`/applications/${id}/submit`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  }),
   applicationEvents: (id) => request(`/applications/${id}/events`),
   bankApplications: (status = "") => request(`/bank/applications${status ? `?status=${status}` : ""}`),
   bankApplication: (id) => request(`/bank/applications/${id}`),
   bankAssessments: (id) => request(`/bank/applications/${id}/assessments`),
+  resolveCompliance: (id, data) => request(`/bank/applications/${id}/compliance-review`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  }),
   requestInfo: (id, data) => request(`/bank/applications/${id}/request-info`, {
     method: "POST",
     body: JSON.stringify(data),
