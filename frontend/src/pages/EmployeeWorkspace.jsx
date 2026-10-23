@@ -37,6 +37,14 @@ function formatPercent(value) {
   return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(Number(value) * 100)}%`;
 }
 
+function newestApplicationFirst(left, right) {
+  const leftCreatedAt = Date.parse(left.created_at || "");
+  const rightCreatedAt = Date.parse(right.created_at || "");
+  if (!Number.isFinite(leftCreatedAt)) return Number.isFinite(rightCreatedAt) ? 1 : 0;
+  if (!Number.isFinite(rightCreatedAt)) return -1;
+  return rightCreatedAt - leftCreatedAt;
+}
+
 function recommendationReason(reason) {
   if (reasonCodeLabels[reason?.code]) return reasonCodeLabels[reason.code];
   if (reason?.code?.startsWith("CHECK_FAILED:")) {
@@ -89,8 +97,9 @@ export default function EmployeeWorkspace({ pathname, navigate }) {
   useEffect(() => { const timer = window.setInterval(() => { if (document.visibilityState === "visible") load(true); }, 5000); return () => window.clearInterval(timer); }, [filter]);
   const applicationMatch = pathname.match(/^\/employee\/applications\/([^/]+)$/);
   if (applicationMatch) return <ApplicationReview key={applicationMatch[1]} id={applicationMatch[1]} navigate={navigate} onBack={() => { navigate("/employee/queue", { replace: true }); load(); }} unavailable={unavailable} />;
-  const waitingItems = (items || []).filter((item) => ["SUBMITTED", "UNDER_REVIEW", "NEEDS_INFO"].includes(item.status));
-  const reviewedItems = (items || []).filter((item) => !["SUBMITTED", "UNDER_REVIEW", "NEEDS_INFO"].includes(item.status));
+  const sortedItems = [...(items || [])].sort(newestApplicationFirst);
+  const waitingItems = sortedItems.filter((item) => ["SUBMITTED", "UNDER_REVIEW", "NEEDS_INFO"].includes(item.status));
+  const reviewedItems = sortedItems.filter((item) => !["SUBMITTED", "UNDER_REVIEW", "NEEDS_INFO"].includes(item.status));
   return <div className="content"><div className="employee-heading"><div><span className="eyebrow eyebrow--red">Рабочее место сотрудника</span><h1>Очередь заявок</h1><p>Рассмотрение, проверки и решение — в одной карточке.</p></div><div className="employee-metric"><span>В работе</span><b>{openCount}</b></div></div>
     {unavailable && <Alert title="Очередь временно недоступна">Сервер не вернул данные заявок. Попробуйте обновить список.</Alert>}
     {error && <><Alert type="error">{error}</Alert><Button variant="secondary" onClick={() => load()}>Повторить</Button></>}

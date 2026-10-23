@@ -331,7 +331,7 @@ def bank_applications(
         filters.append(Application.status == status)
     items = db.execute(
         bank_application_query().where(*filters)
-        .order_by(Application.created_at, Application.id)
+        .order_by(Application.created_at.desc(), Application.id.desc())
         .limit(limit).offset(offset)
     ).all()
     approved_actions = approved_actions_by_application(db, [row[0] for row in items])
