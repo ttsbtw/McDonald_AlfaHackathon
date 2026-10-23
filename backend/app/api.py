@@ -240,11 +240,18 @@ def bank_application_query():
     )
 
 
-def bank_application_out(row):
+def bank_application_out(row, approved_action=None):
     item, company, client, product, assessment = row
     result = assessment.result if assessment else {}
+    payload = DraftOut.model_validate(item).model_dump()
+    if approved_action is not None:
+        payload.update(
+            approved_amount=approved_action.approved_amount,
+            approved_term_months=approved_action.approved_term_months,
+            approved_annual_interest_rate=approved_action.annual_interest_rate,
+        )
     return BankApplicationOut(
-        **DraftOut.model_validate(item).model_dump(),
+        **payload,
         client=client,
         company=company,
         product=product,
@@ -271,8 +278,12 @@ def bank_applications(
         .order_by(Application.created_at, Application.id)
         .limit(limit).offset(offset)
     ).all()
+    approved_actions = approved_actions_by_application(db, [row[0] for row in items])
     total = db.scalar(select(func.count()).select_from(Application).where(*filters))
-    return {"items": [bank_application_out(row) for row in items], "total": total, "limit": limit, "offset": offset}
+    return {
+        "items": [bank_application_out(row, approved_actions.get(row[0].id)) for row in items],
+        "total": total, "limit": limit, "offset": offset,
+    }
 
 
 @router.get("/bank/applications/{application_id}", response_model=BankApplicationOut, tags=["Рабочее место сотрудника"])
@@ -282,7 +293,8 @@ def bank_application(application_id: UUID, db: DB, user: BankEmployee):
     )).one_or_none()
     if row is None:
         raise APIError(404, "APPLICATION_NOT_FOUND", "Заявка не найдена.")
-    return bank_application_out(row)
+    approved_action = approved_actions_by_application(db, [row[0]]).get(row[0].id)
+    return bank_application_out(row, approved_action)
 
 
 @router.get("/bank/applications/{application_id}/assessments", response_model=list[AssessmentOut], tags=["Рабочее место сотрудника"])
