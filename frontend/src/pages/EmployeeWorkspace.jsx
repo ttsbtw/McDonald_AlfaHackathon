@@ -20,9 +20,9 @@ function BankApplicationAmount({ item }) {
     return <strong>{item.requested_amount ? `${Number(item.requested_amount).toLocaleString("ru-RU")} ₽` : "—"}</strong>;
   }
   return <span className="bank-table__amount-change">
-    <s>{formatAlternativeMoneyValue(item.requested_amount)} ₽ · {item.term_months} мес.</s>
+    <span className="bank-table__amount-change-original"><strong><s>{formatAlternativeMoneyValue(item.requested_amount)} ₽</s></strong><small><s>{item.term_months} мес.</s></small></span>
     <b aria-hidden="true">→</b>
-    <span><strong>{formatAlternativeMoneyValue(item.approved_amount)} ₽</strong><small>{item.approved_term_months} мес.</small></span>
+    <span className="bank-table__amount-change-approved"><strong>{formatAlternativeMoneyValue(item.approved_amount)} ₽</strong><small>{item.approved_term_months} мес.</small></span>
   </span>;
 }
 
