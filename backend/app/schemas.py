@@ -133,6 +133,7 @@ class BankApplicationOut(DraftOut):
     risk_level: Literal["LOW", "MEDIUM", "HIGH", "UNKNOWN"] | None
     score: int | None
     recommendation: Literal["APPROVE", "REVIEW", "DECLINE", "REQUEST_INFO"] | None
+    preliminary_decision: Literal["APPROVE", "REVIEW", "DECLINE", "REQUEST_INFO"] | None
 
 
 class BankApplicationPage(APIModel):
@@ -162,6 +163,15 @@ class RequestInfoIn(APIModel):
 class DecisionIn(APIModel):
     decision: Literal["APPROVED", "REJECTED"]
     comment: str | None = Field(default=None, max_length=1000)
+
+
+class SubmitIn(APIModel):
+    credit_history_consent: bool = False
+
+
+class ComplianceReviewIn(APIModel):
+    outcome: Literal["CLEAR", "CONFIRMED_MATCH"]
+    comment: str = Field(min_length=1, max_length=1000)
 
 
 class FieldError(APIModel):

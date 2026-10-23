@@ -60,7 +60,7 @@ def calculate_score(data, features):
             debt_points = 10
 
     history_points = 0
-    if data["current_overdue_amount"] == 0:
+    if data.get("credit_history_available", True) and data["current_overdue_amount"] == 0:
         if days == 0:
             history_points = 20
         elif days <= 7:
