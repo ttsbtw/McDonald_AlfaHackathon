@@ -301,6 +301,22 @@ a { color: inherit; }
 .audit-panel ol { margin-top: 0; }.audit-panel .empty-state { min-height: 190px; }
 .decision-card__reason { margin: -3px 0 4px; padding: 11px; border-radius: 10px; color: #865a00; background: #fff8df; font-size: 10px; line-height: 1.45; }
 
+.company-history__count { min-width: 32px; height: 32px; padding: 0 9px; border-radius: 16px; display: grid; place-items: center; color: var(--muted); background: #f5f5f2; font-size: 11px; font-weight: 800; }
+.company-history__list { margin: 0; padding: 0; list-style: none; display: grid; gap: 9px; }
+.company-history__list > li > button { position: relative; width: 100%; padding: 14px 42px 14px 15px; border: 1px solid var(--line); border-radius: 14px; display: flex; flex-direction: column; align-items: stretch; gap: 6px; text-align: left; background: #fff; transition: border-color .16s, background .16s; }
+.company-history__list > li > button:hover { border-color: #b8b8b2; background: #fbfbf8; }
+.company-history__list > li > button[aria-current="page"] { border-color: #efb1ab; background: #fff9f8; }
+.company-history__top { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.company-history__top > strong { font-size: 13px; }
+.company-history__top .status { flex: 0 0 auto; }
+.company-history__dates, .company-history__purpose { color: var(--muted); font-size: 10px; }
+.company-history__terms { display: flex; flex-wrap: wrap; gap: 5px 14px; font-size: 11px; font-weight: 750; }
+.company-history__terms > strong { color: #315f20; }
+.company-history__score { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); font-size: 10px; }
+.company-history__score > b { padding: 3px 7px; border-radius: 10px; color: #8b2019; background: #fff0ee; font-size: 9px; }
+.company-history__list > li > button > i { position: absolute; right: 15px; top: 50%; color: var(--ink); font-size: 18px; font-style: normal; transform: translateY(-50%); }
+.company-history > .app-button { margin-top: 12px; align-self: flex-start; }
+
 @media (max-width: 700px) {
   .alternatives__heading { flex-direction: column; }
   .alternatives__heading .app-button { width: 100%; }
