@@ -12,6 +12,7 @@
   "dependencies": {
     "@alfalab/core-components-button": "^13.2.4",
     "@alfalab/core-components-slider-input": "^11.1.10",
+    "@alfalab/core-components-toast": "^8.0.15",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

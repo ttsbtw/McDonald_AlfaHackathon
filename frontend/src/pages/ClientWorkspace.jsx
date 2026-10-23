@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "../api/client.js";
-import { Alert, Button, EmptyState, Field, Skeleton, StatusBadge } from "../components/UI.jsx";
+import { Alert, Button, EmptyState, Field, Skeleton, StatusBadge, Toast } from "../components/UI.jsx";
 import { PURPOSES, calculateCreditSummary, digitsOnly, draftPayload, matchProduct, normalizeRangeValue, validateApplication, validateNeed } from "../domain/application.js";
 import { SliderInput } from "@alfalab/core-components-slider-input";
 
@@ -189,7 +189,7 @@ function NeedStep({ products, initial, onChange, onBack, onContinue }) {
   </div>;
 }
 
-function Editor({ application, product, company, need, formSnapshot, onFormChange, onClose, onSaved, onDeleted }) {
+function Editor({ application, product, company, need, formSnapshot, onFormChange, onClose, onSaved, onDeleted, onToast }) {
   const [form, setForm] = useState(() => withFinancialDefaults(formSnapshot || (application ? application : {
     product_code: product?.code || "", requested_amount: need?.amount || product?.min_amount || "", term_months: need?.termMonths || product?.min_term_months || "",
     purpose: PURPOSES.find((item) => item.value === need?.purposeCode)?.label || "",
@@ -348,7 +348,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
       if (!current) current = await api.createApplication(draftPayload(form));
       else current = await api.updateApplication(current.id, { revision: current.revision, ...draftPayload(form) });
       const result = await api.submitApplication(current.id, { credit_history_consent: creditHistoryConsent });
-      setSaved(result); onSaved(result); setNotice("Заявка отправлена на рассмотрение"); setNoticeType("success");
+      setSaved(result); onSaved(result); onToast("Заявка отправлена на рассмотрение");
     } catch (err) {
       if (err.status === 404 || err.status === 405) { setNotice("Не удалось запустить рассмотрение. Черновик сохранён — попробуйте отправить его позже."); setNoticeType("info"); }
       else { setNotice(err.message); setNoticeType("error"); }
@@ -474,7 +474,9 @@ function ApplicationTerms({ item, compact = false }) {
 }
 
 export default function ClientWorkspace({ pathname, navigate }) {
-  const [data, setData] = useState(null); const [error, setError] = useState(""); const [selection, setSelection] = useState(null); const [needSnapshot, setNeedSnapshot] = useState(null); const [formSnapshot, setFormSnapshot] = useState(null);
+  const [data, setData] = useState(null); const [error, setError] = useState(""); const [selection, setSelection] = useState(null); const [needSnapshot, setNeedSnapshot] = useState(null); const [formSnapshot, setFormSnapshot] = useState(null); const [toast, setToast] = useState(null);
+  const showToast = useCallback((message) => setToast({ id: Date.now(), message }), []);
+  const dismissToast = useCallback(() => setToast(null), []);
   async function load() { setError(""); try { const [company, products, page] = await Promise.all([api.company(), api.products(), api.applications()]); setData({ company, products, applications: page.items }); } catch (err) { setError(err.message); } }
   useEffect(() => { load(); }, []);
   useEffect(() => {
@@ -500,7 +502,7 @@ export default function ClientWorkspace({ pathname, navigate }) {
   if (applicationMatch && !application) return <div className="content"><Alert type="error">Заявка не найдена в списке.</Alert><Button onClick={() => navigate("/client")}>К заявкам</Button></div>;
   if (pathname === "/client/new/application" || applicationMatch) {
     const product = data.products.find((item) => item.code === (application?.product_code || selection?.product.code));
-    return <Editor application={application} product={product} need={selection?.need} formSnapshot={formSnapshot} onFormChange={setFormSnapshot} company={data.company} onClose={() => navigate("/client", { replace: true })} onSaved={(saved) => setData({ ...data, applications: [saved, ...data.applications.filter((item) => item.id !== saved.id)] })} onDeleted={(id) => { setData({ ...data, applications: data.applications.filter((item) => item.id !== id) }); setFormSnapshot(null); navigate("/client", { replace: true }); }} />;
+    return <><Editor application={application} product={product} need={selection?.need} formSnapshot={formSnapshot} onFormChange={setFormSnapshot} company={data.company} onClose={() => navigate("/client", { replace: true })} onToast={showToast} onSaved={(saved) => setData({ ...data, applications: [saved, ...data.applications.filter((item) => item.id !== saved.id)] })} onDeleted={(id) => { setData({ ...data, applications: data.applications.filter((item) => item.id !== id) }); setFormSnapshot(null); showToast("Черновик заявки удалён"); navigate("/client", { replace: true }); }} />{toast && <Toast key={toast.id} message={toast.message} onClose={dismissToast} />}</>;
   }
-  return <Dashboard company={data.company} applications={data.applications} onNew={() => { setSelection(null); setNeedSnapshot(null); setFormSnapshot(null); navigate("/client/new"); }} onOpen={(item) => { setFormSnapshot(null); navigate(`/client/applications/${item.id}`); }} />;
+  return <><Dashboard company={data.company} applications={data.applications} onNew={() => { setSelection(null); setNeedSnapshot(null); setFormSnapshot(null); navigate("/client/new"); }} onOpen={(item) => { setFormSnapshot(null); navigate(`/client/applications/${item.id}`); }} />{toast && <Toast key={toast.id} message={toast.message} onClose={dismissToast} />}</>;
 }

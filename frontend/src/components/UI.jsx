@@ -1,5 +1,7 @@
+import { useCallback, useEffect, useRef, useState } from "react";
 import { STATUS_LABELS } from "../domain/application.js";
 import { Button as CoreButton } from "@alfalab/core-components-button";
+import { Toast as CoreToast } from "@alfalab/core-components-toast";
 
 export function Button({ children, variant = "primary", busy, disabled, className = "", ...props }) {
   const views = { primary: "accent", secondary: "secondary", ghost: "text" };
@@ -18,6 +20,47 @@ export function Alert({ type = "info", children, title }) {
   return <div className={`alert alert--${type}`} role={type === "error" ? "alert" : "status"}>
     {title ? <strong>{title}</strong> : null}<span>{children}</span>
   </div>;
+}
+
+export function Toast({ message, onClose, type = "success" }) {
+  const [open, setOpen] = useState(Boolean(message));
+  const closing = useRef(false);
+  const exitTimer = useRef(null);
+  const close = useCallback(() => {
+    if (closing.current) return;
+    closing.current = true;
+    setOpen(false);
+    exitTimer.current = window.setTimeout(onClose, 180);
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!message) return undefined;
+    closing.current = false;
+    setOpen(true);
+    const timer = window.setTimeout(close, 5000);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearTimeout(exitTimer.current);
+    };
+  }, [message, close]);
+
+  if (!message) return null;
+  const badgeByType = {
+    success: "positive-checkmark",
+    error: "negative-alert",
+    info: "neutral-information",
+  };
+  return <CoreToast
+    open={open}
+    title={message}
+    badge={badgeByType[type] || badgeByType.info}
+    autoCloseDelay={5000}
+    bottomOffset={24}
+    closeWithClickOutside={false}
+    closerProps={{ hasCloser: true }}
+    style={{ right: 24, width: "min(420px, calc(100vw - 32px))" }}
+    onClose={close}
+  />;
 }
 
 export function StatusBadge({ status }) {

@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client.js";
-import { Alert, Button, EmptyState, Field, Skeleton, StatusBadge } from "../components/UI.jsx";
+import { Alert, Button, EmptyState, Field, Skeleton, StatusBadge, Toast } from "../components/UI.jsx";
 import { approvalBlockReason, latestComplianceReview, requiresComplianceReview } from "../domain/pipeline.js";
 
 const filters = ["", "UNDER_REVIEW", "NEEDS_INFO", "APPROVED", "REJECTED"];
@@ -104,6 +104,8 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
   const [actionMode, setActionMode] = useState(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState(null);
+  const dismissToast = useCallback(() => setToast(null), []);
   async function loadRecord(silent = false) {
     if (unavailable) return;
     if (!silent) { setLoading(true); setError(""); }
@@ -166,7 +168,7 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
     if (type === "info" && !message) { setError("Напишите, какие сведения нужно предоставить."); return; }
     if (type === "approve" && approvalReason) { setError(approvalReason); return; }
     setBusy(true); setError("");
-    try { if (type === "info") await api.requestInfo(id, { comment: message }); else await api.decide(id, { decision: type === "approve" ? "APPROVED" : "REJECTED", ...(message ? { comment: message } : {}) }); setActionMode(null); setComment(""); await loadRecord(true); }
+    try { if (type === "info") await api.requestInfo(id, { comment: message }); else { await api.decide(id, { decision: type === "approve" ? "APPROVED" : "REJECTED", ...(message ? { comment: message } : {}) }); if (type === "approve") setToast({ id: Date.now(), message: "Заявка одобрена" }); } setActionMode(null); setComment(""); await loadRecord(true); }
     catch (err) { setError(err.message); } finally { setBusy(false); }
   }
   if (loading && !record) return <div className="content content--wide"><button className="back-link" onClick={onBack}>← К очереди</button><Skeleton rows={7} /></div>;
@@ -193,7 +195,7 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
     <AuditPanel id={id} audit={audit} onError={setError} />
   </main><aside className="panel sticky-card decision-card"><span className="eyebrow">Итоговое решение</span><h3>{reviewOpen ? "Следующее действие" : finalDecision ? "Рассмотрение завершено" : "Ожидаем клиента"}</h3>
     {!reviewOpen ? <><StatusBadge status={record.status} /><p className="muted">{finalDecision ? "Итог зафиксирован. Действия по заявке завершены." : "Банк запросил сведения. Действия снова станут доступны после ответа клиента."}</p></> : actionMode ? <><Field label={actionMode === "info" ? "Какие сведения нужно предоставить клиенту?" : "Комментарий к отказу — необязательно"}><textarea rows="5" maxLength="1000" value={comment} onChange={(event) => setComment(event.target.value)} autoFocus /></Field><Button busy={busy} onClick={() => action(actionMode)}>{actionMode === "info" ? "Отправить запрос" : "Подтвердить отказ"}</Button><Button disabled={busy} variant="ghost" onClick={() => { setActionMode(null); setComment(""); setError(""); }}>Отмена</Button></> : <><Button busy={busy} disabled={Boolean(approvalReason)} onClick={() => action("approve")}>Одобрить</Button>{approvalReason && <p className="decision-card__reason">{approvalReason}</p>}<Button busy={busy} variant="secondary" onClick={() => { setComment(""); setActionMode("info"); }}>Запросить сведения</Button><Button busy={busy} variant="ghost" onClick={() => { setComment(""); setActionMode("reject"); }}>Отказать</Button></>}
-  </aside></div></div>;
+  </aside></div>{toast && <Toast key={toast.id} message={toast.message} onClose={dismissToast} />}</div>;
 }
 
 function CompanyHistoryPanel({ items, total, loading, moreLoading, error, currentApplicationId, onOpen, onRetry, onLoadMore }) {
