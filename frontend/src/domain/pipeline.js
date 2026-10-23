@@ -32,7 +32,7 @@ export function approvalBlockReason(application, assessment, complianceReview) {
     && reviewRules.every((rule) => COMPLIANCE_RULES.has(rule.code));
   if (!hasReject && onlyComplianceReview && complianceReview?.payload?.outcome === "CLEAR") return "";
   if (requiresComplianceReview(assessment) && complianceReview?.payload?.outcome !== "CLEAR") {
-    return "Сначала завершите ручной разбор Compliance с исходом «Совпадение снято».";
+    return "Сначала завершите ручную комплаенс-проверку с исходом «Совпадение снято».";
   }
-  return "Underwriting не пройден: одобрение недоступно до устранения причин.";
+  return "Правила кредитования не пройдены: одобрение недоступно до устранения причин.";
 }

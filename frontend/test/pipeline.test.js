@@ -9,7 +9,7 @@ test("approval waits for a current manual compliance clearance", () => {
     underwriting: { status: "REVIEW", rules: [{ code: "COMPLIANCE_ERROR", outcome: "REVIEW" }] },
   } };
   assert.equal(requiresComplianceReview(assessment), true);
-  assert.match(approvalBlockReason(application, assessment, null), /Compliance/);
+  assert.match(approvalBlockReason(application, assessment, null), /комплаенс/);
   const audit = { records: [{ event_type: "COMPLIANCE_REVIEW", payload: { assessment_id: "assessment-1", outcome: "CLEAR" } }] };
   const review = latestComplianceReview(audit, assessment.id);
   assert.equal(approvalBlockReason(application, assessment, review), "");
@@ -20,5 +20,5 @@ test("approval stays blocked for underwriting reject rules", () => {
     assessment_status: "COMPLETED", hard_stops: [], missing_fields: [],
     underwriting: { status: "REJECT", rules: [{ code: "DEBT_BURDEN", outcome: "REJECT" }] },
   } };
-  assert.match(approvalBlockReason({ status: "UNDER_REVIEW" }, assessment, null), /Underwriting/);
+  assert.match(approvalBlockReason({ status: "UNDER_REVIEW" }, assessment, null), /Правила кредитования/);
 });

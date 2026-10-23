@@ -1,16 +1,28 @@
 import { useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "../api/client.js";
 import { Alert, Button, EmptyState, Field, Skeleton, StatusBadge } from "../components/UI.jsx";
-import { PURPOSES, calculateCreditSummary, digitsOnly, draftPayload, matchProduct, validateApplication, validateNeed } from "../domain/application.js";
+import { PURPOSES, calculateCreditSummary, digitsOnly, draftPayload, matchProduct, normalizeRangeValue, validateApplication, validateNeed } from "../domain/application.js";
 import { SliderInput } from "@alfalab/core-components-slider-input";
 
 const emptyForm = {
   product_code: "", requested_amount: "", term_months: "", purpose: "",
-  average_monthly_revenue: "", average_monthly_operating_expenses: "", existing_monthly_debt_payment: "",
+  average_monthly_revenue: "0", average_monthly_operating_expenses: "0", existing_monthly_debt_payment: "0",
 };
+const FINANCIAL_MAX = 10_000_000;
+const DEBT_PAYMENT_MAX = 5_000_000;
+
+function withFinancialDefaults(values = {}) {
+  return {
+    ...emptyForm,
+    ...values,
+    average_monthly_revenue: values.average_monthly_revenue ?? "0",
+    average_monthly_operating_expenses: values.average_monthly_operating_expenses ?? "0",
+    existing_monthly_debt_payment: values.existing_monthly_debt_payment ?? "0",
+  };
+}
 
 function formatMoney(value) {
-  if (value === null || value === undefined || value === "") return "—";
+  if (value === null || value === undefined || value === "" || !Number.isFinite(Number(value))) return "—";
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(Number(value)) + " ₽";
 }
 
@@ -104,7 +116,14 @@ function NeedStep({ products, initial, onChange, onBack, onContinue }) {
   const termMid = Math.round((termMin + termMax) / 2);
   const sliderValue = (value, min, max) => Math.min(max, Math.max(min, Number(value) || min));
   function updateNeed(next) { setNeed(next); onChange?.(next); }
-  function updateRange(field, value) { updateNeed({ ...need, [field]: digitsOnly(value) }); }
+  function updateRange(field, value) {
+    updateNeed({ ...need, [field]: digitsOnly(value) });
+    setErrors((current) => ({ ...current, [field]: undefined }));
+  }
+  function finishRange(field, min, max) {
+    updateNeed({ ...need, [field]: normalizeRangeValue(need[field], min, max) });
+    setFocusedRange("");
+  }
 
   function search(event) {
     event?.preventDefault();
@@ -116,7 +135,7 @@ function NeedStep({ products, initial, onChange, onBack, onContinue }) {
     <form className="need-grid" onSubmit={search}>
       <section className="panel panel--form">
         <h2>Цель финансирования</h2>
-        <div className="purpose-grid">{PURPOSES.map((purpose) => <button type="button" key={purpose.value} className={`purpose-card ${need.purposeCode === purpose.value ? "is-selected" : ""}`} onClick={() => updateNeed({ ...need, purposeCode: purpose.value })}><i /><strong>{purpose.label}</strong><span>{purpose.hint}</span></button>)}</div>
+        <div className="purpose-grid">{PURPOSES.map((purpose) => <button type="button" key={purpose.value} className={`purpose-card ${need.purposeCode === purpose.value ? "is-selected" : ""}`} onClick={() => { updateNeed({ ...need, purposeCode: purpose.value }); setErrors((current) => ({ ...current, purposeCode: undefined })); }}><i /><strong>{purpose.label}</strong><span>{purpose.hint}</span></button>)}</div>
         {errors.purposeCode && <span className="form-error">{errors.purposeCode}</span>}
         <div className="need-ranges">
           <div className="need-range">
@@ -134,7 +153,7 @@ function NeedStep({ products, initial, onChange, onBack, onContinue }) {
               steps={[formatCompactMoney(amountMin), formatCompactMoney(amountMid), formatCompactMoney(amountMax)]}
               onChange={(_, payload) => updateRange("amount", payload.value)}
               onFocus={() => setFocusedRange("amount")}
-              onBlur={() => setFocusedRange("")}
+              onBlur={() => finishRange("amount", amountMin, amountMax)}
               dataTestId="credit-amount-slider"
             />
             {errors.amount && <span className="form-error">{errors.amount}</span>}
@@ -154,7 +173,7 @@ function NeedStep({ products, initial, onChange, onBack, onContinue }) {
               steps={[formatTerm(termMin), formatTerm(termMid), formatTerm(termMax)]}
               onChange={(_, payload) => updateRange("termMonths", payload.value)}
               onFocus={() => setFocusedRange("termMonths")}
-              onBlur={() => setFocusedRange("")}
+              onBlur={() => finishRange("termMonths", termMin, termMax)}
               dataTestId="credit-term-slider"
             />
             {errors.termMonths && <span className="form-error">{errors.termMonths}</span>}
@@ -171,10 +190,10 @@ function NeedStep({ products, initial, onChange, onBack, onContinue }) {
 }
 
 function Editor({ application, product, company, need, formSnapshot, onFormChange, onClose, onSaved, onDeleted }) {
-  const [form, setForm] = useState(() => formSnapshot || (application ? { ...emptyForm, ...application } : {
-    ...emptyForm, product_code: product?.code || "", requested_amount: need?.amount || "", term_months: need?.termMonths || "",
+  const [form, setForm] = useState(() => withFinancialDefaults(formSnapshot || (application ? application : {
+    product_code: product?.code || "", requested_amount: need?.amount || product?.min_amount || "", term_months: need?.termMonths || product?.min_term_months || "",
     purpose: PURPOSES.find((item) => item.value === need?.purposeCode)?.label || "",
-  }));
+  })));
   const [saved, setSaved] = useState(application || null);
   const [errors, setErrors] = useState({});
   const [notice, setNotice] = useState("");
@@ -190,6 +209,13 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
   const status = saved?.status;
   const readOnly = ["SUBMITTED", "UNDER_REVIEW", "APPROVED", "REJECTED"].includes(status);
   const finalDecision = ["APPROVED", "REJECTED"].includes(status);
+  const heading = finalDecision
+    ? { eyebrow: "Этап 3 из 3", title: "Решение по заявке", number: "03" }
+    : status === "UNDER_REVIEW" || status === "SUBMITTED"
+      ? { eyebrow: "Этап 3 из 3", title: "Заявка на рассмотрении", number: "03" }
+      : status === "NEEDS_INFO"
+        ? { eyebrow: "Требуется уточнение", title: "Дополните заявку", number: "02" }
+        : { eyebrow: "Шаг 2 из 2", title: saved ? "Заявка" : "Расскажите о бизнесе", number: "02" };
   const creditHints = useMemo(() => getCreditHints(form, product), [form, product]);
   const amountMin = Number(product?.min_amount ?? 300_000);
   const amountMax = Number(product?.max_amount ?? 10_000_000);
@@ -201,6 +227,10 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
     form.term_months,
     product?.annual_interest_rate,
   ), [form.requested_amount, form.term_months, product?.annual_interest_rate]);
+
+  useEffect(() => {
+    if (["NEEDS_INFO", "APPROVED", "REJECTED"].includes(status)) setNotice("");
+  }, [status]);
 
   useEffect(() => {
     if (!saved?.id) {
@@ -235,7 +265,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
         const current = await api.application(saved.id);
         if (current.status !== saved.status || current.revision !== saved.revision) {
           setSaved(current);
-          setForm({ ...emptyForm, ...current });
+          setForm(withFinancialDefaults(current));
           onSaved(current);
         }
       } catch {
@@ -272,10 +302,18 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
     if (readOnly) return;
     const next = { ...form, [field]: event.target.value };
     setForm(next); onFormChange(next);
+    setErrors((current) => ({ ...current, [field]: undefined }));
   };
   function updateRange(field, value) {
+    if (readOnly) return;
     const next = { ...form, [field]: digitsOnly(value) };
     setForm(next); onFormChange(next);
+    setErrors((current) => ({ ...current, [field]: undefined }));
+  }
+  function finishRange(field, min, max) {
+    if (readOnly) return;
+    const next = { ...form, [field]: normalizeRangeValue(form[field], min, max) };
+    setForm(next); onFormChange(next); setFocusedRange("");
   }
   async function save(event) {
     event?.preventDefault(); if (readOnly) return;
@@ -283,7 +321,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
     try {
       const payload = draftPayload(form);
       const result = saved ? await api.updateApplication(saved.id, { revision: saved.revision, ...payload }) : await api.createApplication(payload);
-      setSaved(result); setForm({ ...emptyForm, ...result }); setNotice("Черновик сохранён"); setNoticeType("success"); onSaved(result);
+      setSaved(result); setForm(withFinancialDefaults(result)); setNotice("Черновик сохранён"); setNoticeType("success"); onSaved(result);
     } catch (err) {
       if (err instanceof ApiError && err.fields.length) setErrors(Object.fromEntries(err.fields.map((item) => [item.field.split(".").pop(), item.message])));
       setNotice(err.message); setNoticeType("error");
@@ -291,7 +329,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
   }
   async function submit() {
     if (readOnly) return;
-    const nextErrors = validateApplication(form); setErrors(nextErrors); setNotice("");
+    const nextErrors = validateApplication(form, product); setErrors(nextErrors); setNotice("");
     if (Object.keys(nextErrors).length) return;
     setBusy(true);
     try {
@@ -301,7 +339,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
       const result = await api.submitApplication(current.id, { credit_history_consent: creditHistoryConsent });
       setSaved(result); onSaved(result); setNotice("Заявка отправлена на рассмотрение"); setNoticeType("success");
     } catch (err) {
-      if (err.status === 404 || err.status === 405) { setNotice("Отправка появится после подключения backend-процесса задачи №5. Черновик сохранён и не потерян."); setNoticeType("info"); }
+      if (err.status === 404 || err.status === 405) { setNotice("Не удалось запустить рассмотрение. Черновик сохранён — попробуйте отправить его позже."); setNoticeType("info"); }
       else { setNotice(err.message); setNoticeType("error"); }
     } finally { setBusy(false); }
   }
@@ -317,19 +355,38 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
     } finally { setBusy(false); }
   }
 
-  return <div className="content content--form"><button className="back-link" onClick={onClose}>← К заявкам</button><div className="page-heading"><div><span className="eyebrow eyebrow--red">Шаг 2 из 2</span><h1>{saved ? "Заявка" : "Расскажите о бизнесе"}</h1>{saved && <StatusBadge status={status} />}<p>{readOnly ? (status === "APPROVED" ? "Заявка одобрена. Анкета доступна только для просмотра." : status === "REJECTED" ? "По заявке принято решение об отказе. Анкета доступна только для просмотра." : "Заявка уже отправлена и ожидает решения. Изменения пока недоступны.") : "Известные банку сведения уже заполнены. Добавьте только показатели для оценки."}</p></div><span className="big-number">02</span></div>
+  return <div className="content content--form"><button className="back-link" onClick={onClose}>← К заявкам</button><div className="page-heading"><div><span className="eyebrow eyebrow--red">{heading.eyebrow}</span><h1>{heading.title}</h1>{saved && <StatusBadge status={status} />}<p>{readOnly ? (status === "APPROVED" ? "Заявка одобрена. Ниже сохранены итог и данные отправленной анкеты." : status === "REJECTED" ? "По заявке принято решение об отказе. Ниже сохранены данные отправленной анкеты." : "Заявка отправлена и ожидает решения. Изменения пока недоступны.") : "Известные банку сведения уже заполнены. Добавьте только показатели для оценки."}</p></div><span className="big-number">{heading.number}</span></div>
     {notice && <Alert type={noticeType}>{notice}</Alert>}
     {status === "NEEDS_INFO" && <Alert title="Банк запросил уточнения">{infoRequest.loading ? "Загружаем сообщение сотрудника…" : infoRequest.error ? `Не удалось загрузить сообщение: ${infoRequest.error}` : infoRequest.message || "В истории нет текста запроса. Свяжитесь с сотрудником банка, чтобы уточнить, какие сведения нужно добавить."}</Alert>}
     {status === "REJECTED" && <Alert title="Комментарий банка">{infoRequest.loading ? "Загружаем сообщение сотрудника…" : infoRequest.error ? `Не удалось загрузить сообщение: ${infoRequest.error}` : infoRequest.message || "Сотрудник не добавил комментарий к решению."}</Alert>}
     {status === "UNDER_REVIEW" && alternativeError && <Alert type="error">Не удалось загрузить предложение: {alternativeError}</Alert>}
     {status === "UNDER_REVIEW" && alternativeOffer && <ClientAlternativeCard offer={alternativeOffer} busy={alternativeBusy} onDecision={decideAlternative} />}
-    {status === "APPROVED" && hasChangedApprovedTerms(application) && <ApprovedConditions application={application} />}
+    {status === "APPROVED" && hasChangedApprovedTerms(saved) && <ApprovedConditions application={saved} />}
     {saved?.id && <ApplicationTimeline history={history} status={status} />}
     <form className="application-layout" onSubmit={save}>
       <div className="application-main">
         <section className="panel form-section"><div className="form-section__heading"><span>01</span><div><h2>Компания</h2><p>Сведения действующего клиента</p></div></div><div className="company-card"><b>{company.name}</b><span>{company.legal_form} · ИНН {company.inn}</span><small>Работает с {new Date(company.registration_date).toLocaleDateString("ru-RU")}</small></div></section>
-        <section className="panel form-section"><div className="form-section__heading"><span>02</span><div><h2>Параметры кредита</h2><p>{readOnly ? "Параметры отправленной заявки" : "Можно изменить до отправки"}</p></div></div><Field label="Продукт" error={errors.product_code}><input value={product?.name || form.product_code} disabled /></Field><div className="form-row application-ranges"><div className="application-range"><SliderInput className="need-range__control" label="Сумма" value={focusedRange === "amount" ? form.requested_amount : formatInputNumber(form.requested_amount)} sliderValue={sliderValue(form.requested_amount, amountMin, amountMax)} min={amountMin} max={amountMax} step={50_000} size={64} client="desktop" rightAddons="₽" steps={[formatCompactMoney(amountMin), formatCompactMoney(Math.round((amountMin + amountMax) / 2 / 50_000) * 50_000), formatCompactMoney(amountMax)]} disabled={readOnly} error={errors.requested_amount} onChange={(_, payload) => updateRange("requested_amount", payload.value)} onFocus={() => setFocusedRange("amount")} onBlur={() => setFocusedRange("")} dataTestId="application-amount-slider" /></div><div className="application-range"><SliderInput className="need-range__control" label="Срок" value={focusedRange === "term" ? form.term_months : formatInputNumber(form.term_months)} sliderValue={sliderValue(form.term_months, termMin, termMax)} min={termMin} max={termMax} step={1} size={64} client="desktop" rightAddons="мес." steps={[formatTerm(termMin), formatTerm(Math.round((termMin + termMax) / 2)), formatTerm(termMax)]} disabled={readOnly} error={errors.term_months} onChange={(_, payload) => updateRange("term_months", payload.value)} onFocus={() => setFocusedRange("term")} onBlur={() => setFocusedRange("")} dataTestId="application-term-slider" /></div></div>{creditSummary && <CreditSummary summary={creditSummary} rate={product?.annual_interest_rate} />}<Field label="Цель" error={errors.purpose}><textarea rows="3" maxLength="200" value={form.purpose ?? ""} onChange={set("purpose")} disabled={readOnly} /></Field></section>
-        <section className="panel form-section"><div className="form-section__heading"><span>03</span><div><h2>Финансовые показатели</h2><p>Средние значения за последние 12 завершённых месяцев</p></div></div><div className="form-row application-ranges"><div className="application-range"><SliderInput className="need-range__control" label="Выручка в месяц" value={focusedRange === "revenue" ? form.average_monthly_revenue : formatInputNumber(form.average_monthly_revenue)} sliderValue={sliderValue(form.average_monthly_revenue, 50_000, 10_000_000)} min={50_000} max={10_000_000} step={50_000} size={64} client="desktop" rightAddons="₽" steps={[formatCompactMoney(50_000), formatCompactMoney(5_000_000), formatCompactMoney(10_000_000)]} disabled={readOnly} error={errors.average_monthly_revenue} onChange={(_, payload) => updateRange("average_monthly_revenue", payload.value)} onFocus={() => setFocusedRange("revenue")} onBlur={() => setFocusedRange("")} dataTestId="application-revenue-slider" /></div><div className="application-range"><SliderInput className="need-range__control" label="Операционные расходы" hint="Без платежей по кредитам" value={focusedRange === "expenses" ? form.average_monthly_operating_expenses : formatInputNumber(form.average_monthly_operating_expenses)} sliderValue={sliderValue(form.average_monthly_operating_expenses, 50_000, 10_000_000)} min={50_000} max={10_000_000} step={50_000} size={64} client="desktop" rightAddons="₽" steps={[formatCompactMoney(50_000), formatCompactMoney(5_000_000), formatCompactMoney(10_000_000)]} disabled={readOnly} error={errors.average_monthly_operating_expenses} onChange={(_, payload) => updateRange("average_monthly_operating_expenses", payload.value)} onFocus={() => setFocusedRange("expenses")} onBlur={() => setFocusedRange("")} dataTestId="application-expenses-slider" /></div></div><div className="application-range application-range--full"><SliderInput className="need-range__control" label="Ежемесячные платежи по действующим кредитам" hint="Ползунок — до 5 млн ₽; больше можно ввести вручную" value={focusedRange === "debt" ? form.existing_monthly_debt_payment : formatInputNumber(form.existing_monthly_debt_payment)} sliderValue={sliderValue(form.existing_monthly_debt_payment, 0, 5_000_000)} min={0} max={5_000_000} step={50_000} size={64} client="desktop" rightAddons="₽" steps={["0 ₽", formatCompactMoney(2_500_000), formatCompactMoney(5_000_000)]} disabled={readOnly} error={errors.existing_monthly_debt_payment} onChange={(_, payload) => updateRange("existing_monthly_debt_payment", payload.value)} onFocus={() => setFocusedRange("debt")} onBlur={() => setFocusedRange("")} dataTestId="application-debt-slider" /></div>{!readOnly && creditHints.length > 0 && <div className="credit-hints" role="status" aria-live="polite">{creditHints.map((hint) => <article className={`credit-hint credit-hint--${hint.severity}`} key={hint.title}><strong>{hint.title}</strong><span>{hint.text}</span></article>)}<small>Это подсказка, а не решение по кредиту. Банк проверит заявку и сообщит результат.</small></div>}</section>
+        <section className="panel form-section">
+          <div className="form-section__heading"><span>02</span><div><h2>Параметры кредита</h2><p>{readOnly ? "Параметры отправленной заявки" : "Можно изменить до отправки"}</p></div></div>
+          {readOnly ? <>
+            <dl className="facts readonly-facts"><div><dt>Продукт</dt><dd>{product?.name || form.product_code || "—"}</dd></div><div><dt>Сумма</dt><dd>{formatMoney(form.requested_amount)}</dd></div><div><dt>Срок</dt><dd>{form.term_months || "—"} мес.</dd></div></dl>
+            {creditSummary && <CreditSummary summary={creditSummary} rate={product?.annual_interest_rate} />}
+            <div className="readonly-copy"><small>Цель финансирования</small><p>{form.purpose || "Не указана"}</p></div>
+          </> : <>
+            <Field label="Продукт" error={errors.product_code}><input value={product?.name || form.product_code} disabled /></Field>
+            <div className="form-row application-ranges"><div className="application-range"><SliderInput className="need-range__control" label="Сумма" value={focusedRange === "amount" ? form.requested_amount : formatInputNumber(form.requested_amount)} sliderValue={sliderValue(form.requested_amount, amountMin, amountMax)} min={amountMin} max={amountMax} step={50_000} size={64} client="desktop" rightAddons="₽" steps={[formatCompactMoney(amountMin), formatCompactMoney(Math.round((amountMin + amountMax) / 2 / 50_000) * 50_000), formatCompactMoney(amountMax)]} error={errors.requested_amount} onChange={(_, payload) => updateRange("requested_amount", payload.value)} onFocus={() => setFocusedRange("amount")} onBlur={() => finishRange("requested_amount", amountMin, amountMax)} dataTestId="application-amount-slider" /></div><div className="application-range"><SliderInput className="need-range__control" label="Срок" value={focusedRange === "term" ? form.term_months : formatInputNumber(form.term_months)} sliderValue={sliderValue(form.term_months, termMin, termMax)} min={termMin} max={termMax} step={1} size={64} client="desktop" rightAddons="мес." steps={[formatTerm(termMin), formatTerm(Math.round((termMin + termMax) / 2)), formatTerm(termMax)]} error={errors.term_months} onChange={(_, payload) => updateRange("term_months", payload.value)} onFocus={() => setFocusedRange("term")} onBlur={() => finishRange("term_months", termMin, termMax)} dataTestId="application-term-slider" /></div></div>
+            {creditSummary && <CreditSummary summary={creditSummary} rate={product?.annual_interest_rate} />}
+            <Field label="Цель" error={errors.purpose}><textarea rows="3" maxLength="200" value={form.purpose ?? ""} onChange={set("purpose")} /></Field>
+          </>}
+        </section>
+        <section className="panel form-section">
+          <div className="form-section__heading"><span>03</span><div><h2>Финансовые показатели</h2><p>Средние значения за последние 12 завершённых месяцев</p></div></div>
+          {readOnly ? <dl className="facts readonly-facts readonly-facts--financial"><div><dt>Выручка в месяц</dt><dd>{formatMoney(form.average_monthly_revenue)}</dd></div><div><dt>Операционные расходы</dt><dd>{formatMoney(form.average_monthly_operating_expenses)}</dd></div><div><dt>Платежи по кредитам</dt><dd>{formatMoney(form.existing_monthly_debt_payment)}</dd></div></dl> : <>
+            <div className="form-row application-ranges"><div className="application-range"><SliderInput className="need-range__control" label="Выручка в месяц" value={focusedRange === "revenue" ? form.average_monthly_revenue : formatInputNumber(form.average_monthly_revenue)} sliderValue={sliderValue(form.average_monthly_revenue, 0, FINANCIAL_MAX)} min={0} max={FINANCIAL_MAX} step={50_000} size={64} client="desktop" rightAddons="₽" steps={["0 ₽", formatCompactMoney(FINANCIAL_MAX / 2), formatCompactMoney(FINANCIAL_MAX)]} error={errors.average_monthly_revenue} onChange={(_, payload) => updateRange("average_monthly_revenue", payload.value)} onFocus={() => setFocusedRange("revenue")} onBlur={() => finishRange("average_monthly_revenue", 0, FINANCIAL_MAX)} dataTestId="application-revenue-slider" /></div><div className="application-range"><SliderInput className="need-range__control" label="Операционные расходы" hint="Без платежей по кредитам" value={focusedRange === "expenses" ? form.average_monthly_operating_expenses : formatInputNumber(form.average_monthly_operating_expenses)} sliderValue={sliderValue(form.average_monthly_operating_expenses, 0, FINANCIAL_MAX)} min={0} max={FINANCIAL_MAX} step={50_000} size={64} client="desktop" rightAddons="₽" steps={["0 ₽", formatCompactMoney(FINANCIAL_MAX / 2), formatCompactMoney(FINANCIAL_MAX)]} error={errors.average_monthly_operating_expenses} onChange={(_, payload) => updateRange("average_monthly_operating_expenses", payload.value)} onFocus={() => setFocusedRange("expenses")} onBlur={() => finishRange("average_monthly_operating_expenses", 0, FINANCIAL_MAX)} dataTestId="application-expenses-slider" /></div></div>
+            <div className="application-range application-range--full"><SliderInput className="need-range__control" label="Ежемесячные платежи по действующим кредитам" value={focusedRange === "debt" ? form.existing_monthly_debt_payment : formatInputNumber(form.existing_monthly_debt_payment)} sliderValue={sliderValue(form.existing_monthly_debt_payment, 0, DEBT_PAYMENT_MAX)} min={0} max={DEBT_PAYMENT_MAX} step={50_000} size={64} client="desktop" rightAddons="₽" steps={["0 ₽", formatCompactMoney(DEBT_PAYMENT_MAX / 2), formatCompactMoney(DEBT_PAYMENT_MAX)]} error={errors.existing_monthly_debt_payment} onChange={(_, payload) => updateRange("existing_monthly_debt_payment", payload.value)} onFocus={() => setFocusedRange("debt")} onBlur={() => finishRange("existing_monthly_debt_payment", 0, DEBT_PAYMENT_MAX)} dataTestId="application-debt-slider" /></div>
+            {creditHints.length > 0 && <div className="credit-hints" role="status" aria-live="polite">{creditHints.map((hint) => <article className={`credit-hint credit-hint--${hint.severity}`} key={hint.title}><strong>{hint.title}</strong><span>{hint.text}</span></article>)}<small>Это подсказка, а не решение по кредиту. Банк проверит заявку и сообщит результат.</small></div>}
+          </>}
+        </section>
       </div>
       <aside className="application-aside"><div className="panel sticky-card">{readOnly ? <><span className="eyebrow">{finalDecision ? "Решение банка" : "Заявка отправлена"}</span><h3>{status === "APPROVED" ? "Кредит одобрен" : status === "REJECTED" ? "Заявка отклонена" : "Заявка на рассмотрении"}</h3><p className="muted">{finalDecision ? "Изменить или отправить эту заявку повторно нельзя." : "Пока заявка рассматривается, редактирование и повторная отправка недоступны."}</p></> : <><span className="eyebrow">Перед отправкой</span><h3>Что произойдёт дальше</h3><ol><li>Проверим полноту анкеты</li><li>Выполним локальные проверки</li><li>Передадим сотруднику банка</li></ol><label className="consent-field"><input type="checkbox" checked={creditHistoryConsent} onChange={(event) => setCreditHistoryConsent(event.target.checked)} /><span>Согласен на запрос синтетической кредитной истории для проверки заявки.</span></label><Button type="submit" variant="secondary" busy={busy}>Сохранить черновик</Button><Button type="button" onClick={submit} busy={busy}>Отправить заявку</Button>{saved?.status === "DRAFT" && <Button type="button" variant="ghost" busy={busy} onClick={deleteDraft}>Удалить черновик</Button>}<small>Без согласия демо-проверка кредитной истории будет отмечена как недоступная. Это может ограничить решение и подбор альтернативных условий.</small></>}</div></aside>
     </form>
@@ -393,10 +450,9 @@ function Dashboard({ company, applications, onNew, onOpen }) {
 }
 
 function ApplicationTerms({ item, compact = false }) {
-  if (item.status === "APPROVED" && !hasChangedApprovedTerms(item)) return null;
   const requested = `${formatMoney(item.requested_amount)} · ${item.term_months || "—"} мес.`;
   const hasApproval = hasChangedApprovedTerms(item);
-  if (!hasApproval) return <span className="application-terms__plain">Запрошено: {requested}</span>;
+  if (!hasApproval) return <span className="application-terms__plain">{item.status === "APPROVED" ? "Одобрено" : "Запрошено"}: {requested}</span>;
 
   const approved = `${formatMoney(item.approved_amount)} · ${item.approved_term_months} мес.`;
   return <span className={`application-terms${compact ? " application-terms--compact" : ""}`}>
