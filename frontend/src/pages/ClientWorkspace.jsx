@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "../api/client.js";
-import { Alert, Button, EmptyState, Field, Skeleton, StatusBadge } from "../components/UI.jsx";
+import { Accordion } from "@alfalab/core-components-accordion";
+import { Alert, Button, EmptyState, Field, Skeleton, StatusBadge, Toast } from "../components/UI.jsx";
 import { PURPOSES, calculateCreditSummary, digitsOnly, draftPayload, matchProduct, normalizeRangeValue, validateApplication, validateNeed } from "../domain/application.js";
 import { SliderInput } from "@alfalab/core-components-slider-input";
 
@@ -189,7 +190,7 @@ function NeedStep({ products, initial, onChange, onBack, onContinue }) {
   </div>;
 }
 
-function Editor({ application, product, company, need, formSnapshot, onFormChange, onClose, onSaved, onDeleted }) {
+function Editor({ application, product, company, need, formSnapshot, onFormChange, onClose, onSaved, onDeleted, onToast }) {
   const [form, setForm] = useState(() => withFinancialDefaults(formSnapshot || (application ? application : {
     product_code: product?.code || "", requested_amount: need?.amount || product?.min_amount || "", term_months: need?.termMonths || product?.min_term_months || "",
     purpose: PURPOSES.find((item) => item.value === need?.purposeCode)?.label || "",
@@ -348,7 +349,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
       if (!current) current = await api.createApplication(draftPayload(form));
       else current = await api.updateApplication(current.id, { revision: current.revision, ...draftPayload(form) });
       const result = await api.submitApplication(current.id, { credit_history_consent: creditHistoryConsent });
-      setSaved(result); onSaved(result); setNotice("Заявка отправлена на рассмотрение"); setNoticeType("success");
+      setSaved(result); onSaved(result); onToast("Заявка отправлена на рассмотрение");
     } catch (err) {
       if (err.status === 404 || err.status === 405) { setNotice("Не удалось запустить рассмотрение. Черновик сохранён — попробуйте отправить его позже."); setNoticeType("info"); }
       else { setNotice(err.message); setNoticeType("error"); }
@@ -399,7 +400,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
           </>}
         </section>
       </div>
-      <aside className="application-aside"><div className="panel sticky-card">{readOnly ? <><span className="eyebrow">{finalDecision ? "Решение банка" : "Заявка отправлена"}</span><h3>{status === "APPROVED" ? "Кредит одобрен" : status === "REJECTED" ? "Заявка отклонена" : "Заявка на рассмотрении"}</h3><p className="muted">{finalDecision ? "Изменить или отправить эту заявку повторно нельзя." : "Пока заявка рассматривается, редактирование и повторная отправка недоступны."}</p></> : <><span className="eyebrow">Перед отправкой</span><h3>Что произойдёт дальше</h3><ol><li>Проверим полноту анкеты</li><li>Выполним локальные проверки</li><li>Передадим сотруднику банка</li></ol><label className="consent-field"><input type="checkbox" checked={creditHistoryConsent} onChange={(event) => setCreditHistoryConsent(event.target.checked)} /><span>Согласен на запрос синтетической кредитной истории для проверки заявки.</span></label><Button type="submit" variant="secondary" busy={busy}>Сохранить черновик</Button><Button type="button" onClick={submit} busy={busy}>Отправить заявку</Button>{saved?.status === "DRAFT" && <Button type="button" variant="ghost" busy={busy} onClick={deleteDraft}>Удалить черновик</Button>}<small>Без согласия демо-проверка кредитной истории будет отмечена как недоступная. Это может ограничить решение и подбор альтернативных условий.</small></>}</div></aside>
+      <aside className="application-aside"><div className="panel sticky-card">{readOnly ? <><span className="eyebrow">{finalDecision ? "Решение банка" : "Заявка отправлена"}</span><h3>{status === "APPROVED" ? "Кредит одобрен" : status === "REJECTED" ? "Заявка отклонена" : "Заявка на рассмотрении"}</h3><p className="muted">{finalDecision ? "Изменить или отправить эту заявку повторно нельзя." : "Пока заявка рассматривается, редактирование и повторная отправка недоступны."}</p></> : <><span className="eyebrow">Перед отправкой</span><h3>Что произойдёт дальше</h3><ol><li>Проверим полноту анкеты</li><li>Выполним локальные проверки</li><li>Передадим сотруднику банка</li></ol><label className="consent-field"><input type="checkbox" checked={creditHistoryConsent} onChange={(event) => setCreditHistoryConsent(event.target.checked)} /><span>Согласен на запрос синтетической кредитной истории для проверки заявки.</span></label><Accordion className="consent-info" containerClassName="consent-info__trigger" headerClassName="consent-info__header" bodyContentClassName="consent-info__content" header="Зачем нужно согласие?">С согласия будет запрошена демо-кредитная история, а её результат попадёт в проверки заявки. Без согласия проверка будет отмечена как недоступная и может ограничить решение и подбор альтернативных условий.</Accordion><Button type="submit" variant="secondary" busy={busy}>Сохранить черновик</Button><Button type="button" onClick={submit} busy={busy}>Отправить заявку</Button>{saved?.status === "DRAFT" && <Button type="button" variant="ghost" busy={busy} onClick={deleteDraft}>Удалить черновик</Button>}</>}</div></aside>
     </form>
   </div>;
 }
@@ -474,7 +475,9 @@ function ApplicationTerms({ item, compact = false }) {
 }
 
 export default function ClientWorkspace({ pathname, navigate }) {
-  const [data, setData] = useState(null); const [error, setError] = useState(""); const [selection, setSelection] = useState(null); const [needSnapshot, setNeedSnapshot] = useState(null); const [formSnapshot, setFormSnapshot] = useState(null);
+  const [data, setData] = useState(null); const [error, setError] = useState(""); const [selection, setSelection] = useState(null); const [needSnapshot, setNeedSnapshot] = useState(null); const [formSnapshot, setFormSnapshot] = useState(null); const [toast, setToast] = useState(null);
+  const showToast = useCallback((message) => setToast({ id: Date.now(), message }), []);
+  const dismissToast = useCallback(() => setToast(null), []);
   async function load() { setError(""); try { const [company, products, page] = await Promise.all([api.company(), api.products(), api.applications()]); setData({ company, products, applications: page.items }); } catch (err) { setError(err.message); } }
   useEffect(() => { load(); }, []);
   useEffect(() => {
@@ -500,7 +503,7 @@ export default function ClientWorkspace({ pathname, navigate }) {
   if (applicationMatch && !application) return <div className="content"><Alert type="error">Заявка не найдена в списке.</Alert><Button onClick={() => navigate("/client")}>К заявкам</Button></div>;
   if (pathname === "/client/new/application" || applicationMatch) {
     const product = data.products.find((item) => item.code === (application?.product_code || selection?.product.code));
-    return <Editor application={application} product={product} need={selection?.need} formSnapshot={formSnapshot} onFormChange={setFormSnapshot} company={data.company} onClose={() => navigate("/client", { replace: true })} onSaved={(saved) => setData({ ...data, applications: [saved, ...data.applications.filter((item) => item.id !== saved.id)] })} onDeleted={(id) => { setData({ ...data, applications: data.applications.filter((item) => item.id !== id) }); setFormSnapshot(null); navigate("/client", { replace: true }); }} />;
+    return <><Editor application={application} product={product} need={selection?.need} formSnapshot={formSnapshot} onFormChange={setFormSnapshot} company={data.company} onClose={() => navigate("/client", { replace: true })} onToast={showToast} onSaved={(saved) => setData({ ...data, applications: [saved, ...data.applications.filter((item) => item.id !== saved.id)] })} onDeleted={(id) => { setData({ ...data, applications: data.applications.filter((item) => item.id !== id) }); setFormSnapshot(null); showToast("Черновик заявки удалён"); navigate("/client", { replace: true }); }} />{toast && <Toast key={toast.id} message={toast.message} onClose={dismissToast} />}</>;
   }
-  return <Dashboard company={data.company} applications={data.applications} onNew={() => { setSelection(null); setNeedSnapshot(null); setFormSnapshot(null); navigate("/client/new"); }} onOpen={(item) => { setFormSnapshot(null); navigate(`/client/applications/${item.id}`); }} />;
+  return <><Dashboard company={data.company} applications={data.applications} onNew={() => { setSelection(null); setNeedSnapshot(null); setFormSnapshot(null); navigate("/client/new"); }} onOpen={(item) => { setFormSnapshot(null); navigate(`/client/applications/${item.id}`); }} />{toast && <Toast key={toast.id} message={toast.message} onClose={dismissToast} />}</>;
 }
