@@ -1,19 +1,23 @@
 """Demo scorecard. All arithmetic runs inside the entry point's Decimal context."""
 
-from decimal import Decimal, ROUND_UP
+from decimal import ROUND_UP, Context, Decimal, localcontext
+
+
+def calculate_monthly_payment(principal: Decimal, term_months: int, annual_interest_rate: Decimal) -> Decimal:
+    """Return the demo annuity payment, rounded up to the next kopeck."""
+    with localcontext(Context(prec=40)):
+        rate = annual_interest_rate / Decimal(1200)
+        payment = principal / term_months if rate == 0 else (
+            principal * rate / (1 - (1 + rate) ** -term_months)
+        )
+        return payment.quantize(Decimal("0.01"), rounding=ROUND_UP)
 
 
 def calculate_features(data, policy):
     start, end = data["registration_date"], data["as_of_date"]
     age = (end.year - start.year) * 12 + end.month - start.month - (end.day < start.day)
     principal, term = data["requested_amount"], data["term_months"]
-    rate = policy["annual_interest_rate"] / Decimal(1200)
-    if rate == 0:
-        payment = principal / term
-    else:
-        payment = principal * rate / (1 - (1 + rate) ** -term)
-    # Round upwards so affordability is never improved by a fraction of a kopeck.
-    payment = payment.quantize(Decimal("0.01"), rounding=ROUND_UP)
+    payment = calculate_monthly_payment(principal, term, policy["annual_interest_rate"])
     revenue = data["average_monthly_revenue"]
     available = revenue - data["average_monthly_operating_expenses"]
     total_payment = data["existing_monthly_debt_payment"] + payment

@@ -73,11 +73,22 @@ export const api = {
     body: JSON.stringify(data),
   }),
   deleteApplication: (id) => request(`/applications/${id}`, { method: "DELETE" }),
-  submitApplication: (id) => request(`/applications/${id}/submit`, { method: "POST" }),
+  submitApplication: (id, data) => request(`/applications/${id}/submit`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  }),
   applicationEvents: (id) => request(`/applications/${id}/events`),
+  applicationAlternativeOffer: (id) => request(`/applications/${id}/alternative-offer`),
+  decideAlternativeOffer: (id, offerId, data) => request(`/applications/${id}/alternative-offers/${offerId}/decision`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  }),
   bankApplications: (status = "") => request(`/bank/applications${status ? `?status=${status}` : ""}`),
   bankApplication: (id) => request(`/bank/applications/${id}`),
   bankAssessments: (id) => request(`/bank/applications/${id}/assessments`),
+  bankAlternatives: (id) => request(`/bank/applications/${id}/alternatives`),
+  generateAlternatives: (id) => request(`/bank/applications/${id}/alternatives/generate`, { method: "POST" }),
+  offerAlternative: (id, offerId) => request(`/bank/applications/${id}/alternatives/${offerId}/offer`, { method: "POST" }),
   requestInfo: (id, data) => request(`/bank/applications/${id}/request-info`, {
     method: "POST",
     body: JSON.stringify(data),

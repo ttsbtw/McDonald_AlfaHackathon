@@ -51,6 +51,7 @@ class ProcessingPipeline:
             "status": "PASS" if compliance["status"] == "CLEAR" else "UNKNOWN",
             "reason_code": compliance["reason_code"],
         }]
+        result["check_reports"] = {"bki": bki, "compliance": compliance}
         result["preliminary_decision"] = (
             "DECLINE" if underwriting["status"] == "REJECT" else
             "REVIEW" if underwriting["status"] == "REVIEW" else result.get("recommendation", "REVIEW")

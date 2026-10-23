@@ -163,6 +163,41 @@ class ComplianceReview(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class AlternativeOffer(Base):
+    """Persist a generated safe condition and its employee/client lifecycle."""
+    __tablename__ = "alternative_offers"
+    __table_args__ = (
+        Index("ix_alternative_offers_application_created", "application_id", "created_at", "id"),
+        Index("ix_alternative_offers_generation", "generation_id", "created_at"),
+        CheckConstraint("status IN ('GENERATED', 'OFFERED', 'ACCEPTED', 'DECLINED', 'SUPERSEDED')",
+                        name="ck_alternative_offer_status"),
+        CheckConstraint("amount > 0 AND term_months BETWEEN 1 AND 360", name="ck_alternative_offer_terms"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    application_id: Mapped[UUID] = mapped_column(ForeignKey("applications.id", ondelete="CASCADE"))
+    assessment_id: Mapped[UUID] = mapped_column(ForeignKey("assessments.id"))
+    generation_id: Mapped[UUID] = mapped_column(Uuid)
+    client_identifier: Mapped[str] = mapped_column(String(64))
+    employee_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    position: Mapped[int] = mapped_column(Integer)
+    amount: Mapped[Decimal] = mapped_column(Numeric(15, 2))
+    term_months: Mapped[int] = mapped_column(Integer)
+    annual_interest_rate: Mapped[Decimal] = mapped_column(Numeric(5, 2))
+    monthly_payment: Mapped[Decimal] = mapped_column(Numeric(15, 2))
+    debt_burden: Mapped[Decimal | None] = mapped_column(Numeric(12, 8), nullable=True)
+    reason_code: Mapped[str] = mapped_column(String(64))
+    reason: Mapped[str] = mapped_column(Text)
+    differences: Mapped[dict] = mapped_column(JSONB)
+    evaluation: Mapped[dict] = mapped_column(JSONB)
+    versions: Mapped[dict] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(String(20), default="GENERATED")
+    decision_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    offered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class ApplicationEvent(Base):
     """Append-only audit trail of application edits and state transitions."""
     __tablename__ = "application_events"

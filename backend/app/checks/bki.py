@@ -21,10 +21,10 @@ class MockBKIProvider:
             "payments_12m": 12, "on_time_payments_12m": 12,
         },
         "000000000002": {
-            "status": "AVAILABLE", "history_code": "OVERDUE_DEBT",
+            "status": "AVAILABLE", "history_code": "MINOR_DELAY_HISTORY",
             "active_loans": 2, "current_debt": "640000.00", "monthly_payment": "45000.00",
-            "current_overdue_amount": "18000.00", "max_overdue_days_12m": 46,
-            "payments_12m": 12, "on_time_payments_12m": 9,
+            "current_overdue_amount": "0.00", "max_overdue_days_12m": 7,
+            "payments_12m": 12, "on_time_payments_12m": 11,
         },
         "000000000003": {
             "status": "NO_HISTORY", "history_code": "NO_CREDIT_HISTORY",

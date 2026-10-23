@@ -14,6 +14,17 @@ function formatMoney(value) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(Number(value)) + " ₽";
 }
 
+function formatPercent(value) {
+  if (value === null || value === undefined || value === "" || !Number.isFinite(Number(value))) return "—";
+  return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(Number(value) * 100)}%`;
+}
+
+function hasChangedApprovedTerms(application) {
+  if (application?.approved_amount === null || application?.approved_amount === undefined) return false;
+  return Number(application.approved_amount) !== Number(application.requested_amount)
+    || Number(application.approved_term_months) !== Number(application.term_months);
+}
+
 function formatCompactMoney(value) {
   if (value >= 1_000_000) return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(value / 1_000_000)} млн ₽`;
   return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(value / 1_000)} тыс. ₽`;
@@ -171,6 +182,10 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
   const [busy, setBusy] = useState(false);
   const [focusedRange, setFocusedRange] = useState("");
   const [infoRequest, setInfoRequest] = useState({ loading: false, error: "", message: "" });
+  const [alternativeOffer, setAlternativeOffer] = useState(null);
+  const [alternativeError, setAlternativeError] = useState("");
+  const [alternativeBusy, setAlternativeBusy] = useState(false);
+  const [creditHistoryConsent, setCreditHistoryConsent] = useState(false);
   const status = saved?.status;
   const readOnly = ["SUBMITTED", "UNDER_REVIEW", "APPROVED", "REJECTED"].includes(status);
   const finalDecision = ["APPROVED", "REJECTED"].includes(status);
@@ -200,6 +215,28 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
       });
     return () => { active = false; };
   }, [saved?.id, status]);
+
+  useEffect(() => {
+    if (!saved?.id || status !== "UNDER_REVIEW") {
+      setAlternativeOffer(null); setAlternativeError("");
+      return;
+    }
+    let active = true;
+    api.applicationAlternativeOffer(saved.id)
+      .then((offer) => { if (active) { setAlternativeOffer(offer); setAlternativeError(""); } })
+      .catch((err) => { if (active) setAlternativeError(err.message); });
+    return () => { active = false; };
+  }, [saved?.id, status]);
+
+  async function decideAlternative(decision) {
+    if (!saved?.id || !alternativeOffer) return;
+    setAlternativeBusy(true); setAlternativeError("");
+    try {
+      const result = await api.decideAlternativeOffer(saved.id, alternativeOffer.id, { decision });
+      setAlternativeOffer(result);
+    } catch (err) { setAlternativeError(err.message); }
+    finally { setAlternativeBusy(false); }
+  }
 
   const set = (field) => (event) => {
     if (readOnly) return;
@@ -231,7 +268,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
       let current = saved;
       if (!current) current = await api.createApplication(draftPayload(form));
       else current = await api.updateApplication(current.id, { revision: current.revision, ...draftPayload(form) });
-      const result = await api.submitApplication(current.id);
+      const result = await api.submitApplication(current.id, { credit_history_consent: creditHistoryConsent });
       setSaved(result); onSaved(result); setNotice("Заявка отправлена на рассмотрение"); setNoticeType("success");
     } catch (err) {
       if (err.status === 404 || err.status === 405) { setNotice("Отправка появится после подключения backend-процесса задачи №5. Черновик сохранён и не потерян."); setNoticeType("info"); }
@@ -254,27 +291,79 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
     {notice && <Alert type={noticeType}>{notice}</Alert>}
     {status === "NEEDS_INFO" && <Alert title="Банк запросил уточнения">{infoRequest.loading ? "Загружаем сообщение сотрудника…" : infoRequest.error ? `Не удалось загрузить сообщение: ${infoRequest.error}` : infoRequest.message || "В истории нет текста запроса. Свяжитесь с сотрудником банка, чтобы уточнить, какие сведения нужно добавить."}</Alert>}
     {status === "REJECTED" && <Alert title="Комментарий банка">{infoRequest.loading ? "Загружаем сообщение сотрудника…" : infoRequest.error ? `Не удалось загрузить сообщение: ${infoRequest.error}` : infoRequest.message || "Сотрудник не добавил комментарий к решению."}</Alert>}
+    {status === "UNDER_REVIEW" && alternativeError && <Alert type="error">Не удалось загрузить предложение: {alternativeError}</Alert>}
+    {status === "UNDER_REVIEW" && alternativeOffer && <ClientAlternativeCard offer={alternativeOffer} busy={alternativeBusy} onDecision={decideAlternative} />}
+    {status === "APPROVED" && hasChangedApprovedTerms(application) && <ApprovedConditions application={application} />}
     <form className="application-layout" onSubmit={save}>
       <div className="application-main">
         <section className="panel form-section"><div className="form-section__heading"><span>01</span><div><h2>Компания</h2><p>Сведения действующего клиента</p></div></div><div className="company-card"><b>{company.name}</b><span>{company.legal_form} · ИНН {company.inn}</span><small>Работает с {new Date(company.registration_date).toLocaleDateString("ru-RU")}</small></div></section>
         <section className="panel form-section"><div className="form-section__heading"><span>02</span><div><h2>Параметры кредита</h2><p>{readOnly ? "Параметры отправленной заявки" : "Можно изменить до отправки"}</p></div></div><Field label="Продукт" error={errors.product_code}><input value={product?.name || form.product_code} disabled /></Field><div className="form-row application-ranges"><div className="application-range"><SliderInput className="need-range__control" label="Сумма" value={focusedRange === "amount" ? form.requested_amount : formatInputNumber(form.requested_amount)} sliderValue={sliderValue(form.requested_amount, amountMin, amountMax)} min={amountMin} max={amountMax} step={50_000} size={64} client="desktop" rightAddons="₽" steps={[formatCompactMoney(amountMin), formatCompactMoney(Math.round((amountMin + amountMax) / 2 / 50_000) * 50_000), formatCompactMoney(amountMax)]} disabled={readOnly} error={errors.requested_amount} onChange={(_, payload) => updateRange("requested_amount", payload.value)} onFocus={() => setFocusedRange("amount")} onBlur={() => setFocusedRange("")} dataTestId="application-amount-slider" /></div><div className="application-range"><SliderInput className="need-range__control" label="Срок" value={focusedRange === "term" ? form.term_months : formatInputNumber(form.term_months)} sliderValue={sliderValue(form.term_months, termMin, termMax)} min={termMin} max={termMax} step={1} size={64} client="desktop" rightAddons="мес." steps={[formatTerm(termMin), formatTerm(Math.round((termMin + termMax) / 2)), formatTerm(termMax)]} disabled={readOnly} error={errors.term_months} onChange={(_, payload) => updateRange("term_months", payload.value)} onFocus={() => setFocusedRange("term")} onBlur={() => setFocusedRange("")} dataTestId="application-term-slider" /></div></div><Field label="Цель" error={errors.purpose}><textarea rows="3" maxLength="200" value={form.purpose ?? ""} onChange={set("purpose")} disabled={readOnly} /></Field></section>
         <section className="panel form-section"><div className="form-section__heading"><span>03</span><div><h2>Финансовые показатели</h2><p>Средние значения за последние 12 завершённых месяцев</p></div></div><div className="form-row application-ranges"><div className="application-range"><SliderInput className="need-range__control" label="Выручка в месяц" value={focusedRange === "revenue" ? form.average_monthly_revenue : formatInputNumber(form.average_monthly_revenue)} sliderValue={sliderValue(form.average_monthly_revenue, 50_000, 10_000_000)} min={50_000} max={10_000_000} step={50_000} size={64} client="desktop" rightAddons="₽" steps={[formatCompactMoney(50_000), formatCompactMoney(5_000_000), formatCompactMoney(10_000_000)]} disabled={readOnly} error={errors.average_monthly_revenue} onChange={(_, payload) => updateRange("average_monthly_revenue", payload.value)} onFocus={() => setFocusedRange("revenue")} onBlur={() => setFocusedRange("")} dataTestId="application-revenue-slider" /></div><div className="application-range"><SliderInput className="need-range__control" label="Операционные расходы" hint="Без платежей по кредитам" value={focusedRange === "expenses" ? form.average_monthly_operating_expenses : formatInputNumber(form.average_monthly_operating_expenses)} sliderValue={sliderValue(form.average_monthly_operating_expenses, 50_000, 10_000_000)} min={50_000} max={10_000_000} step={50_000} size={64} client="desktop" rightAddons="₽" steps={[formatCompactMoney(50_000), formatCompactMoney(5_000_000), formatCompactMoney(10_000_000)]} disabled={readOnly} error={errors.average_monthly_operating_expenses} onChange={(_, payload) => updateRange("average_monthly_operating_expenses", payload.value)} onFocus={() => setFocusedRange("expenses")} onBlur={() => setFocusedRange("")} dataTestId="application-expenses-slider" /></div></div><div className="application-range application-range--full"><SliderInput className="need-range__control" label="Ежемесячные платежи по действующим кредитам" value={focusedRange === "debt" ? form.existing_monthly_debt_payment : formatInputNumber(form.existing_monthly_debt_payment)} sliderValue={sliderValue(form.existing_monthly_debt_payment, 0, 10_000_000)} min={0} max={10_000_000} step={50_000} size={64} client="desktop" rightAddons="₽" steps={["0 ₽", formatCompactMoney(5_000_000), formatCompactMoney(10_000_000)]} disabled={readOnly} error={errors.existing_monthly_debt_payment} onChange={(_, payload) => updateRange("existing_monthly_debt_payment", payload.value)} onFocus={() => setFocusedRange("debt")} onBlur={() => setFocusedRange("")} dataTestId="application-debt-slider" /></div>{!readOnly && creditHints.length > 0 && <div className="credit-hints" role="status" aria-live="polite">{creditHints.map((hint) => <article className={`credit-hint credit-hint--${hint.severity}`} key={hint.title}><strong>{hint.title}</strong><span>{hint.text}</span></article>)}<small>Это подсказка, а не решение по кредиту. Банк проверит заявку и сообщит результат.</small></div>}</section>
       </div>
-      <aside className="application-aside"><div className="panel sticky-card">{readOnly ? <><span className="eyebrow">{finalDecision ? "Решение банка" : "Заявка отправлена"}</span><h3>{status === "APPROVED" ? "Кредит одобрен" : status === "REJECTED" ? "Заявка отклонена" : "Заявка на рассмотрении"}</h3><p className="muted">{finalDecision ? "Изменить или отправить эту заявку повторно нельзя." : "Пока заявка рассматривается, редактирование и повторная отправка недоступны."}</p></> : <><span className="eyebrow">Перед отправкой</span><h3>Что произойдёт дальше</h3><ol><li>Проверим полноту анкеты</li><li>Выполним локальные проверки</li><li>Передадим сотруднику банка</li></ol><Button type="submit" variant="secondary" busy={busy}>Сохранить черновик</Button><Button type="button" onClick={submit} busy={busy}>Отправить заявку</Button>{saved?.status === "DRAFT" && <Button type="button" variant="ghost" busy={busy} onClick={deleteDraft}>Удалить черновик</Button>}<small>Отправляя заявку, вы подтверждаете корректность синтетических данных.</small></>}</div></aside>
+      <aside className="application-aside"><div className="panel sticky-card">{readOnly ? <><span className="eyebrow">{finalDecision ? "Решение банка" : "Заявка отправлена"}</span><h3>{status === "APPROVED" ? "Кредит одобрен" : status === "REJECTED" ? "Заявка отклонена" : "Заявка на рассмотрении"}</h3><p className="muted">{finalDecision ? "Изменить или отправить эту заявку повторно нельзя." : "Пока заявка рассматривается, редактирование и повторная отправка недоступны."}</p></> : <><span className="eyebrow">Перед отправкой</span><h3>Что произойдёт дальше</h3><ol><li>Проверим полноту анкеты</li><li>Выполним локальные проверки</li><li>Передадим сотруднику банка</li></ol><label className="consent-field"><input type="checkbox" checked={creditHistoryConsent} onChange={(event) => setCreditHistoryConsent(event.target.checked)} /><span>Согласен на запрос синтетической кредитной истории для проверки заявки.</span></label><Button type="submit" variant="secondary" busy={busy}>Сохранить черновик</Button><Button type="button" onClick={submit} busy={busy}>Отправить заявку</Button>{saved?.status === "DRAFT" && <Button type="button" variant="ghost" busy={busy} onClick={deleteDraft}>Удалить черновик</Button>}<small>Без согласия демо-проверка кредитной истории будет отмечена как недоступная. Это может ограничить решение и подбор альтернативных условий.</small></>}</div></aside>
     </form>
   </div>;
 }
 
+function ApprovedConditions({ application }) {
+  const requestedAmount = formatMoney(application.requested_amount);
+  const requestedTerm = `${application.term_months || "—"} мес.`;
+  const approvedAmount = formatMoney(application.approved_amount);
+  const approvedTerm = `${application.approved_term_months} мес.`;
+  return <section className="panel approval-terms">
+    <div className="approval-terms__heading"><span className="eyebrow eyebrow--red">Решение банка</span><h2>Условия одобрения</h2><p>Банк одобрил финансирование на изменённых условиях.</p></div>
+    <div className="approval-terms__flow">
+      <div className="approval-terms__side approval-terms__side--requested"><small>Запрошено</small><strong><s>{requestedAmount}</s></strong><span><s>{requestedTerm}</s></span></div>
+      <span className="approval-terms__arrow" aria-label="Изменено на">→</span>
+      <div className="approval-terms__side approval-terms__side--approved"><small>Одобрено</small><strong>{approvedAmount}</strong><span>{approvedTerm}</span><small>Ставка {formatPercent(Number(application.approved_annual_interest_rate) / 100)} годовых</small></div>
+    </div>
+    <p className="approval-terms__note">Исходные параметры заявки сохранены в анкете ниже.</p>
+  </section>;
+}
+
+function ClientAlternativeCard({ offer, busy, onDecision }) {
+  const pending = offer.status === "OFFERED";
+  const title = pending ? "Банк предлагает изменить условия" : offer.status === "ACCEPTED" ? "Вы приняли альтернативные условия" : "Вы отказались от альтернативных условий";
+  return <section className="panel client-alternative"><div><span className="eyebrow eyebrow--red">Альтернатива от банка · демо-расчёт</span><h2>{title}</h2><p>{offer.reason}</p></div><dl className="facts"><div><dt>Сумма</dt><dd>{formatMoney(offer.amount)}</dd></div><div><dt>Срок</dt><dd>{offer.term_months} мес.</dd></div><div><dt>Ставка</dt><dd>{formatPercent(Number(offer.annual_interest_rate) / 100)}</dd></div><div><dt>Ежемесячный платёж</dt><dd>{formatMoney(offer.monthly_payment)}</dd></div><div><dt>Долговая нагрузка</dt><dd>{formatPercent(offer.debt_burden)}</dd></div></dl>{pending ? <><p className="muted">Если вы примете вариант, сотрудник банка всё равно должен принять итоговое решение. Исходные параметры заявки не изменятся.</p><div className="client-alternative__actions"><Button busy={busy} onClick={() => onDecision("ACCEPTED")}>Принять условия</Button><Button disabled={busy} variant="secondary" onClick={() => onDecision("DECLINED")}>Отказаться</Button></div></> : <p className="muted">{offer.status === "ACCEPTED" ? "Заявка остаётся на рассмотрении до решения сотрудника банка." : "Банк продолжит рассматривать исходную заявку."}</p>}</section>;
+}
+
 function Dashboard({ company, applications, onNew, onOpen }) {
   return <div className="content"><section className="client-hero"><div><span className="eyebrow">Кабинет предпринимателя</span><h1>Здравствуйте,<br />{company.name}</h1><p>Подберите финансирование и следите за решением без звонков и визитов.</p><Button onClick={onNew}>Подобрать финансирование</Button></div><div className="hero-shape" aria-hidden="true"><b>₽</b><i /><i /></div></section>
-    <section className="dashboard-section"><div className="section-title"><div><span className="eyebrow eyebrow--red">Мои заявки</span><h2>История финансирования</h2></div><span>{applications.length}</span></div>{applications.length ? <div className="application-list">{applications.map((item) => <button key={item.id} onClick={() => onOpen(item)}><div><StatusBadge status={item.status} /><h3>{item.purpose || "Заявка без названия"}</h3><span>{formatMoney(item.requested_amount)} · {item.term_months || "—"} мес.</span></div><div><small>Обновлена</small><b>{new Date(item.updated_at).toLocaleDateString("ru-RU")}</b><i>→</i></div></button>)}</div> : <EmptyState icon="₽" title="Заявок пока нет" action={<Button onClick={onNew}>Начать подбор</Button>}>Начните с потребности — сумму, срок и продукт подберём на следующем шаге.</EmptyState>}</section>
+    <section className="dashboard-section"><div className="section-title"><div><span className="eyebrow eyebrow--red">Мои заявки</span><h2>История финансирования</h2></div><span>{applications.length}</span></div>{applications.length ? <div className="application-list">{applications.map((item) => <button key={item.id} onClick={() => onOpen(item)}><div><StatusBadge status={item.status} /><h3>{item.purpose || "Заявка без названия"}</h3><ApplicationTerms item={item} compact /></div><div><small>Обновлена</small><b>{new Date(item.updated_at).toLocaleDateString("ru-RU")}</b><i>→</i></div></button>)}</div> : <EmptyState icon="₽" title="Заявок пока нет" action={<Button onClick={onNew}>Начать подбор</Button>}>Начните с потребности — сумму, срок и продукт подберём на следующем шаге.</EmptyState>}</section>
   </div>;
+}
+
+function ApplicationTerms({ item, compact = false }) {
+  if (item.status === "APPROVED" && !hasChangedApprovedTerms(item)) return null;
+  const requested = `${formatMoney(item.requested_amount)} · ${item.term_months || "—"} мес.`;
+  const hasApproval = hasChangedApprovedTerms(item);
+  if (!hasApproval) return <span className="application-terms__plain">Запрошено: {requested}</span>;
+
+  const approved = `${formatMoney(item.approved_amount)} · ${item.approved_term_months} мес.`;
+  return <span className={`application-terms${compact ? " application-terms--compact" : ""}`}>
+    <span className="application-terms__requested"><small>Запрошено</small><s>{requested}</s></span>
+    <span className="application-terms__arrow" aria-hidden="true">→</span>
+    <span className="application-terms__approved"><small>Одобрено</small><strong>{approved}</strong></span>
+  </span>;
 }
 
 export default function ClientWorkspace({ pathname, navigate }) {
   const [data, setData] = useState(null); const [error, setError] = useState(""); const [selection, setSelection] = useState(null); const [needSnapshot, setNeedSnapshot] = useState(null); const [formSnapshot, setFormSnapshot] = useState(null);
   async function load() { setError(""); try { const [company, products, page] = await Promise.all([api.company(), api.products(), api.applications()]); setData({ company, products, applications: page.items }); } catch (err) { setError(err.message); } }
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    const refreshApplications = async () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        const page = await api.applications();
+        setData((current) => current ? { ...current, applications: page.items } : current);
+      } catch {
+        // Keep the current screen usable; the next refresh can recover.
+      }
+    };
+    const timer = window.setInterval(refreshApplications, 5000);
+    return () => window.clearInterval(timer);
+  }, []);
   useEffect(() => { if (data && pathname === "/client/new/application" && !selection) navigate("/client/new", { replace: true }); }, [data, pathname, selection, navigate]);
   if (error) return <div className="content"><Alert type="error">{error}</Alert><Button onClick={load}>Повторить</Button></div>;
   if (!data) return <div className="content"><Skeleton rows={5} /></div>;
