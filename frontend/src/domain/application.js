@@ -15,6 +15,29 @@ export const STATUS_LABELS = {
 
 const toNumber = (value) => Number(String(value ?? "").replace(/\s/g, ""));
 
+export function digitsOnly(value) {
+  return String(value ?? "").replace(/\D/g, "");
+}
+
+export function calculateCreditSummary(amountValue, termValue, annualRateValue) {
+  const amount = toNumber(amountValue);
+  const term = toNumber(termValue);
+  const annualRate = Number(annualRateValue);
+  if (!Number.isFinite(amount) || amount <= 0 || !Number.isInteger(term) || term <= 0
+      || !Number.isFinite(annualRate) || annualRate < 0) return null;
+  const monthlyRate = annualRate / 1200;
+  const rawPayment = monthlyRate === 0
+    ? amount / term
+    : amount * monthlyRate / (1 - (1 + monthlyRate) ** -term);
+  const monthlyPayment = Math.ceil(rawPayment * 100) / 100;
+  const totalPayment = Math.round(monthlyPayment * term * 100) / 100;
+  return {
+    monthlyPayment,
+    totalPayment,
+    overpayment: Math.max(0, Math.round((totalPayment - amount) * 100) / 100),
+  };
+}
+
 export function matchProduct(product, need) {
   const amount = toNumber(need.amount);
   const term = toNumber(need.termMonths);
