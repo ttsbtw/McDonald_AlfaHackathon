@@ -1,8 +1,9 @@
 import csv
 import io
 import json
+from decimal import Decimal
 from typing import Annotated, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.security import OAuth2PasswordRequestForm
@@ -10,9 +11,11 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import StaleDataError
 
+from .alternatives import generate_alternatives
 from .auth import DB, BankEmployee, Client, CurrentUser, create_token, dummy_hash, password_hash
 from .errors import APIError
 from .models import (
+    AlternativeOffer,
     Application,
     ApplicationEvent,
     Assessment,
@@ -26,10 +29,14 @@ from .models import (
 )
 from .pipeline.processing import ProcessingPipeline
 from .schemas import (
+    AlternativeCandidateOut,
+    AlternativeDecisionIn,
+    AlternativeSetOut,
     ApplicationEventOut,
     AssessmentOut,
     BankApplicationOut,
     BankApplicationPage,
+    ClientAlternativeOfferOut,
     CompanyOut,
     ComplianceReviewIn,
     DecisionIn,
@@ -282,6 +289,251 @@ def bank_audit_export(application_id: UUID, db: DB, user: BankEmployee,
                     headers={"Content-Disposition": f'attachment; filename="application-{application_id}-audit.csv"'})
 
 
+def employee_alternative_out(row):
+    amount = Decimal(str(row.amount))
+    monthly_payment = Decimal(str(row.monthly_payment))
+    debt_burden = Decimal(str(row.debt_burden)) if row.debt_burden is not None else None
+    return {
+        "id": str(row.id), "assessment_id": str(row.assessment_id),
+        "generation_id": str(row.generation_id), "position": row.position, "amount": format(amount, ".2f"),
+        "term_months": row.term_months, "annual_interest_rate": format(Decimal(str(row.annual_interest_rate)), ".2f"),
+        "monthly_payment": format(monthly_payment, ".2f"),
+        "debt_burden": format(debt_burden, ".8f") if debt_burden is not None else None,
+        "reason_code": row.reason_code, "reason": row.reason, "differences": row.differences,
+        "evaluation": row.evaluation, "versions": row.versions,
+        "status": row.status, "created_at": row.created_at.isoformat(),
+        "offered_at": row.offered_at.isoformat() if row.offered_at else None,
+        "decided_at": row.decided_at.isoformat() if row.decided_at else None,
+        "decision_comment": row.decision_comment,
+    }
+
+
+def client_alternative_out(row):
+    amount = Decimal(str(row.amount))
+    monthly_payment = Decimal(str(row.monthly_payment))
+    debt_burden = Decimal(str(row.debt_burden)) if row.debt_burden is not None else None
+    return {
+        "id": str(row.id), "amount": format(amount, ".2f"),
+        "term_months": row.term_months, "annual_interest_rate": format(Decimal(str(row.annual_interest_rate)), ".2f"),
+        "monthly_payment": format(monthly_payment, ".2f"),
+        "debt_burden": format(debt_burden, ".8f") if debt_burden is not None else None,
+        "reason": row.reason, "differences": row.differences, "status": row.status,
+        "is_demo": True, "offered_at": row.offered_at.isoformat() if row.offered_at else None,
+        "decided_at": row.decided_at.isoformat() if row.decided_at else None,
+        "decision_comment": row.decision_comment,
+    }
+
+
+@router.post("/bank/applications/{application_id}/alternatives/generate", response_model=AlternativeSetOut,
+             tags=["Рабочее место сотрудника"])
+def create_alternative_set(application_id: UUID, db: DB, user: BankEmployee):
+    item = db.get(Application, application_id)
+    if item is None or item.status != "UNDER_REVIEW":
+        raise APIError(409, "APPLICATION_NOT_REVIEWABLE", "Альтернативы доступны только для заявки на рассмотрении.")
+    assessment = current_assessment(db, item)
+    already_accepted = db.scalar(select(AlternativeOffer.id).where(
+        AlternativeOffer.application_id == item.id,
+        AlternativeOffer.assessment_id == assessment.id,
+        AlternativeOffer.status == "ACCEPTED",
+    ).limit(1))
+    if already_accepted:
+        raise APIError(409, "ALTERNATIVE_ALREADY_ACCEPTED", "Клиент уже принял предложение по текущей оценке.")
+    awaiting_client = db.scalar(select(AlternativeOffer.id).where(
+        AlternativeOffer.application_id == item.id,
+        AlternativeOffer.assessment_id == assessment.id,
+        AlternativeOffer.status == "OFFERED",
+    ).limit(1))
+    if awaiting_client:
+        raise APIError(409, "ALTERNATIVE_AWAITING_CLIENT", "Сначала дождитесь ответа клиента на текущее предложение.")
+    result = assessment.result
+    snapshot = result.get("input_snapshot") or assessment.input_snapshot
+    input_data = snapshot.get("input_data") or {}
+    product_policy = snapshot.get("product_policy") or {}
+    checks = snapshot.get("checks") or []
+    reports = result.get("check_reports") or {}
+    bki, compliance = reports.get("bki"), reports.get("compliance")
+    if not input_data or not product_policy or not bki or not compliance:
+        raise APIError(409, "ASSESSMENT_CONTEXT_UNAVAILABLE", "В оценке отсутствуют данные для безопасного подбора альтернатив.")
+    company = db.get(Company, item.company_id)
+    generated = generate_alternatives(
+        input_data=input_data, product_policy=product_policy, checks=checks,
+        bki=bki, compliance=compliance, subject_id=company.inn,
+        registration_date=company.registration_date,
+        original_result=result, original_underwriting=result.get("underwriting", {}),
+    )
+    now = utc_now()
+    old_rows = db.scalars(select(AlternativeOffer).where(
+        AlternativeOffer.application_id == item.id,
+        AlternativeOffer.status.in_(["GENERATED", "OFFERED"]),
+    )).all()
+    for old in old_rows:
+        old.status = "SUPERSEDED"
+        old.decided_at = now
+
+    generation_id = uuid4()
+    rows = []
+    versions = result.get("versions", {})
+    for position, candidate in enumerate(generated["alternatives"], start=1):
+        row = AlternativeOffer(
+            application_id=item.id, assessment_id=assessment.id, generation_id=generation_id,
+            client_identifier=company.inn, employee_id=user.id,
+            position=position,
+            amount=candidate["amount"], term_months=candidate["term_months"],
+            annual_interest_rate=candidate["annual_interest_rate"],
+            monthly_payment=candidate["monthly_payment"], debt_burden=candidate["debt_burden"],
+            reason_code=candidate["reason_code"], reason=candidate["reason"],
+            differences=candidate["differences"],
+            evaluation={"scoring": candidate["scoring"], "underwriting": candidate["underwriting"]},
+            versions=versions, status="GENERATED", created_at=now,
+        )
+        db.add(row)
+        rows.append(row)
+    db.flush()
+    add_audit(db, item, company, user.id, "ALTERNATIVES_GENERATED", "alternative_engine", {
+        "assessment_id": str(assessment.id), "generation_id": str(generation_id),
+        "status": generated["status"], "reason_code": generated["reason_code"],
+        "reason": generated["reason"], "original": generated["original"],
+        "alternatives": [{key: value for key, value in candidate.items() if key != "_distance"}
+                          for candidate in generated["alternatives"]],
+        "versions": versions,
+    })
+    db.commit()
+    return {
+        "application_id": str(item.id), "assessment_id": str(assessment.id),
+        "generation_id": str(generation_id), "status": generated["status"],
+        "reason_code": generated["reason_code"], "reason": generated["reason"],
+        "original": generated["original"], "versions": versions,
+        "alternatives": [employee_alternative_out(row) for row in rows],
+    }
+
+
+@router.get("/bank/applications/{application_id}/alternatives", response_model=AlternativeSetOut,
+            tags=["Рабочее место сотрудника"])
+def get_alternative_set(application_id: UUID, db: DB, user: BankEmployee):
+    item = db.get(Application, application_id)
+    if item is None or item.status == "DRAFT":
+        raise APIError(404, "APPLICATION_NOT_FOUND", "Заявка не найдена.")
+    latest_assessment = db.scalar(select(Assessment).where(
+        Assessment.application_id == item.id,
+    ).order_by(Assessment.application_revision.desc()).limit(1))
+    generated_event = db.scalar(select(AuditLog).where(
+        AuditLog.application_id == item.id, AuditLog.event_type == "ALTERNATIVES_GENERATED",
+    ).order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(1))
+    if (generated_event is None or latest_assessment is None
+            or generated_event.payload.get("assessment_id") != str(latest_assessment.id)):
+        return {"application_id": str(item.id), "status": "NOT_GENERATED", "alternatives": [], "active_offer": None}
+    payload = generated_event.payload
+    generation_value = payload.get("generation_id")
+    generation_id = UUID(generation_value) if generation_value else None
+    rows = db.scalars(select(AlternativeOffer).where(
+        AlternativeOffer.application_id == item.id,
+        AlternativeOffer.generation_id == generation_id,
+    ).order_by(AlternativeOffer.position)).all() if generation_id else []
+    active_offer = db.scalar(select(AlternativeOffer).where(
+        AlternativeOffer.application_id == item.id, AlternativeOffer.assessment_id == latest_assessment.id,
+        AlternativeOffer.status == "OFFERED",
+    ).order_by(AlternativeOffer.offered_at.desc(), AlternativeOffer.id.desc()).limit(1))
+    return {
+        "application_id": str(item.id), "assessment_id": payload.get("assessment_id"),
+        "generation_id": generation_value, "status": payload.get("status"),
+        "reason_code": payload.get("reason_code"), "reason": payload.get("reason"),
+        "original": payload.get("original"), "versions": payload.get("versions", {}),
+        "alternatives": [employee_alternative_out(row) for row in rows],
+        "active_offer": employee_alternative_out(active_offer) if active_offer else None,
+    }
+
+
+@router.post("/bank/applications/{application_id}/alternatives/{alternative_id}/offer",
+             response_model=AlternativeCandidateOut, tags=["Рабочее место сотрудника"])
+def offer_alternative(application_id: UUID, alternative_id: UUID, db: DB, user: BankEmployee):
+    item = db.get(Application, application_id)
+    if item is None or item.status != "UNDER_REVIEW":
+        raise APIError(409, "APPLICATION_NOT_REVIEWABLE", "Предложение можно отправить только по заявке на рассмотрении.")
+    assessment = current_assessment(db, item)
+    offer = db.get(AlternativeOffer, alternative_id)
+    if offer is None or offer.application_id != item.id:
+        raise APIError(404, "ALTERNATIVE_NOT_FOUND", "Вариант условий не найден.")
+    if offer.assessment_id != assessment.id or offer.status != "GENERATED":
+        raise APIError(409, "ALTERNATIVE_NOT_OFFERABLE", "Вариант устарел или уже использован. Пересчитайте альтернативы.")
+    now = utc_now()
+    previous = db.scalars(select(AlternativeOffer).where(
+        AlternativeOffer.application_id == item.id, AlternativeOffer.status == "OFFERED",
+    )).all()
+    for old in previous:
+        old.status = "SUPERSEDED"
+        old.decided_at = now
+    siblings = db.scalars(select(AlternativeOffer).where(
+        AlternativeOffer.generation_id == offer.generation_id,
+        AlternativeOffer.id != offer.id, AlternativeOffer.status == "GENERATED",
+    )).all()
+    for sibling in siblings:
+        sibling.status = "SUPERSEDED"
+        sibling.decided_at = now
+    offer.status = "OFFERED"
+    offer.employee_id = user.id
+    offer.offered_at = now
+    company = db.get(Company, item.company_id)
+    add_audit(db, item, company, user.id, "ALTERNATIVE_OFFERED", "employee_alternatives", {
+        "assessment_id": str(assessment.id), "offer_id": str(offer.id),
+        "generation_id": str(offer.generation_id), "amount": format(offer.amount, ".2f"),
+        "term_months": offer.term_months, "monthly_payment": format(offer.monthly_payment, ".2f"),
+        "annual_interest_rate": format(offer.annual_interest_rate, ".2f"),
+        "debt_burden": format(offer.debt_burden, ".8f") if offer.debt_burden is not None else None,
+        "versions": offer.versions,
+    })
+    db.commit()
+    return employee_alternative_out(offer)
+
+
+@router.get("/applications/{application_id}/alternative-offer", response_model=ClientAlternativeOfferOut | None,
+            tags=["Заявки"])
+def get_client_alternative_offer(application_id: UUID, db: DB, user: Client):
+    own_application(db, user, application_id)
+    latest_assessment = db.scalar(select(Assessment).where(
+        Assessment.application_id == application_id,
+    ).order_by(Assessment.application_revision.desc()).limit(1))
+    if latest_assessment is None:
+        return None
+    offer = db.scalar(select(AlternativeOffer).where(
+        AlternativeOffer.application_id == application_id,
+        AlternativeOffer.assessment_id == latest_assessment.id,
+        AlternativeOffer.status.in_(["OFFERED", "ACCEPTED", "DECLINED"]),
+    ).order_by(AlternativeOffer.offered_at.desc(), AlternativeOffer.id.desc()).limit(1))
+    return client_alternative_out(offer) if offer else None
+
+
+@router.post("/applications/{application_id}/alternative-offers/{alternative_id}/decision",
+             response_model=ClientAlternativeOfferOut, tags=["Заявки"])
+def decide_alternative_offer(application_id: UUID, alternative_id: UUID, payload: AlternativeDecisionIn,
+                             db: DB, user: Client):
+    item = own_application(db, user, application_id)
+    if item.status != "UNDER_REVIEW":
+        raise APIError(409, "APPLICATION_NOT_REVIEWABLE", "Ответить на предложение можно только по заявке на рассмотрении.")
+    assessment = current_assessment(db, item)
+    offer = db.get(AlternativeOffer, alternative_id)
+    if offer is None or offer.application_id != item.id:
+        raise APIError(404, "ALTERNATIVE_NOT_FOUND", "Предложение не найдено.")
+    if offer.assessment_id != assessment.id or offer.status != "OFFERED":
+        raise APIError(409, "ALTERNATIVE_NOT_PENDING", "Предложение уже обработано или устарело.")
+    offer.status = payload.decision
+    offer.decision_comment = payload.comment.strip() if payload.comment and payload.comment.strip() else None
+    offer.decided_at = utc_now()
+    event_type = "ALTERNATIVE_ACCEPTED" if payload.decision == "ACCEPTED" else "ALTERNATIVE_DECLINED"
+    db.add(ApplicationEvent(
+        application_id=item.id, actor_id=user.id, application_revision=assessment.application_revision,
+        event_type=event_type, from_status=item.status, to_status=item.status,
+        message=offer.decision_comment,
+    ))
+    company = db.get(Company, item.company_id)
+    add_audit(db, item, company, user.id, event_type, "client_alternatives", {
+        "assessment_id": str(assessment.id), "offer_id": str(offer.id),
+        "decision": payload.decision, "comment": offer.decision_comment,
+        "amount": format(offer.amount, ".2f"), "term_months": offer.term_months,
+    })
+    db.commit()
+    return client_alternative_out(offer)
+
+
 @router.post("/bank/applications/{application_id}/compliance-review", tags=["Рабочее место сотрудника"])
 def resolve_compliance_review(application_id: UUID, payload: ComplianceReviewIn, db: DB, user: BankEmployee):
     item = db.get(Application, application_id)
@@ -320,7 +572,8 @@ def current_assessment(db, item):
     return assessment
 
 
-def save_review_action(db, item, employee, assessment, action, message, target_status, **terms):
+def save_review_action(db, item, employee, assessment, action, message, target_status,
+                       related_offer_id=None, **terms):
     previous_status = item.status
     db.add(ReviewAction(
         application_id=item.id,
@@ -348,7 +601,19 @@ def save_review_action(db, item, employee, assessment, action, message, target_s
         add_audit(db, item, company, employee.id, "REVIEW_ACTION", "employee_review", {
             "action": action, "from_status": previous_status, "to_status": target_status,
             "application_revision": assessment.application_revision, "message": message,
+            "alternative_offer_id": related_offer_id,
         })
+        if action in {"REQUEST_INFO", "APPROVED", "REJECTED"}:
+            pending_offers = db.scalars(select(AlternativeOffer).where(
+                AlternativeOffer.application_id == item.id,
+                AlternativeOffer.status.in_(["GENERATED", "OFFERED"]),
+            )).all()
+            for pending_offer in pending_offers:
+                pending_offer.status = "SUPERSEDED"
+                pending_offer.decided_at = utc_now()
+                add_audit(db, item, company, employee.id, "ALTERNATIVE_SUPERSEDED", "employee_review", {
+                    "offer_id": str(pending_offer.id), "reason": action,
+                })
         db.commit()
     except (StaleDataError, IntegrityError):
         db.rollback()
@@ -382,12 +647,19 @@ def decide_application(application_id: UUID, payload: DecisionIn, db: DB, user: 
     if payload.decision == "REJECTED":
         message = payload.comment.strip() if payload.comment and payload.comment.strip() else None
         terms = {}
+        related_offer_id = None
     else:
-        if result.get("assessment_status") != "COMPLETED" or result.get("missing_fields"):
+        accepted_offer = db.scalar(select(AlternativeOffer).where(
+            AlternativeOffer.application_id == item.id,
+            AlternativeOffer.assessment_id == assessment.id,
+            AlternativeOffer.status == "ACCEPTED",
+        ).order_by(AlternativeOffer.decided_at.desc(), AlternativeOffer.id.desc()).limit(1))
+        approved_result = accepted_offer.evaluation.get("scoring", {}) if accepted_offer else result
+        underwriting = accepted_offer.evaluation.get("underwriting", {}) if accepted_offer else result.get("underwriting", {})
+        if approved_result.get("assessment_status") != "COMPLETED" or approved_result.get("missing_fields"):
             raise APIError(409, "ASSESSMENT_INCOMPLETE", "Нельзя одобрить заявку без полной оценки и проверок.")
-        if result.get("hard_stops"):
+        if approved_result.get("hard_stops"):
             raise APIError(409, "ASSESSMENT_HARD_STOP", "Нельзя одобрить заявку с обязательным ограничением.")
-        underwriting = result.get("underwriting", {})
         if underwriting.get("status") != "PASS":
             rules = underwriting.get("rules", [])
             compliance_codes = {"COMPLIANCE_POTENTIAL_MATCH", "COMPLIANCE_CONFIRMED_MATCH", "COMPLIANCE_ERROR"}
@@ -409,9 +681,9 @@ def decide_application(application_id: UUID, payload: DecisionIn, db: DB, user: 
         product = db.get(CreditProduct, item.product_code)
         if product is None:
             raise APIError(409, "PRODUCT_UNAVAILABLE", "Не удалось получить условия продукта.")
-        amount = item.requested_amount
-        term = item.term_months
-        rate = product.annual_interest_rate
+        amount = accepted_offer.amount if accepted_offer else item.requested_amount
+        term = accepted_offer.term_months if accepted_offer else item.term_months
+        rate = accepted_offer.annual_interest_rate if accepted_offer else product.annual_interest_rate
         conditions = (
             f"Условия демо-продукта: {amount:.2f} руб., {term} мес., "
             f"расчётная ставка {rate:.2f}% годовых."
@@ -419,8 +691,10 @@ def decide_application(application_id: UUID, payload: DecisionIn, db: DB, user: 
         approval_note = payload.comment.strip() if payload.comment and payload.comment.strip() else None
         message = f"{approval_note}\n{conditions}" if approval_note else conditions
         terms = {"approved_amount": amount, "approved_term_months": term, "annual_interest_rate": rate}
+        related_offer_id = str(accepted_offer.id) if accepted_offer else None
     return save_review_action(
-        db, item, user, assessment, payload.decision, message, payload.decision, **terms,
+        db, item, user, assessment, payload.decision, message, payload.decision,
+        related_offer_id=related_offer_id, **terms,
     )
 
 

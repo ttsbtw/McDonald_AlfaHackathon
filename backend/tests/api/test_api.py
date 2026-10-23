@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import jwt
@@ -15,7 +16,16 @@ from sqlalchemy.orm.exc import StaleDataError
 
 from app.db import Base
 from app.main import create_app
-from app.models import Application, Company, CreditProduct, User
+from app.models import (
+    AlternativeOffer,
+    Application,
+    ApplicationEvent,
+    AuditLog,
+    Company,
+    CreditProduct,
+    ReviewAction,
+    User,
+)
 from app.seed import seed_demo
 
 pytestmark = pytest.mark.postgres
@@ -279,7 +289,7 @@ def test_migration_matches_models_and_roundtrip(database_url):
     command.upgrade(config, "head")
     command.upgrade(config, "head")
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0006_compliance_reviews"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0007_alternative_offers"
     engine.dispose()
 
 
@@ -437,6 +447,11 @@ def test_confirmed_compliance_match_requires_and_records_manual_clearance(client
                         headers=employee_headers).json()[0]["result"]
     assert result["underwriting"]["status"] == "REVIEW"
     assert result["preliminary_decision"] == "REVIEW"
+    alternatives = client.post(f"/api/v1/bank/applications/{draft['id']}/alternatives/generate",
+                              headers=employee_headers)
+    assert alternatives.status_code == 200
+    assert alternatives.json()["status"] == "BLOCKED"
+    assert alternatives.json()["alternatives"] == []
     blocked = client.post(f"/api/v1/bank/applications/{draft['id']}/decision", headers=employee_headers,
                           json={"decision": "APPROVED"})
     assert blocked.status_code == 409
@@ -447,3 +462,142 @@ def test_confirmed_compliance_match_requires_and_records_manual_clearance(client
     approved = client.post(f"/api/v1/bank/applications/{draft['id']}/decision", headers=employee_headers,
                            json={"decision": "APPROVED"})
     assert approved.status_code == 200 and approved.json()["status"] == "APPROVED"
+
+
+def test_alternative_offer_lifecycle_preserves_application_and_requires_employee_approval(
+    client, application, headers,
+):
+    draft = create(client, headers, {
+        "product_code": "working_capital", "requested_amount": "5000000.00", "term_months": 24,
+        "purpose": "Оборотные средства", "average_monthly_revenue": "1000000.00",
+        "average_monthly_operating_expenses": "600000.00", "existing_monthly_debt_payment": "50000.00",
+    })
+    submitted = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers,
+                            json={"credit_history_consent": True})
+    assert submitted.status_code == 200, submitted.text
+    employee_headers = auth_headers(client, "employee", EMPLOYEE_PASSWORD)
+
+    generated = client.post(f"/api/v1/bank/applications/{draft['id']}/alternatives/generate",
+                            headers=employee_headers)
+    assert generated.status_code == 200, generated.text
+    payload = generated.json()
+    assert payload["status"] == "AVAILABLE"
+    assert 1 <= len(payload["alternatives"]) <= 3
+    assert payload["original"]["amount"] == "5000000.00"
+    alternative = payload["alternatives"][0]
+    assert alternative["evaluation"]["underwriting"]["status"] == "PASS"
+    assert alternative["evaluation"]["scoring"]["hard_stops"] == []
+
+    listed = client.get(f"/api/v1/bank/applications/{draft['id']}/alternatives", headers=employee_headers)
+    assert listed.status_code == 200
+    assert listed.json()["alternatives"][0]["id"] == alternative["id"]
+    offered = client.post(
+        f"/api/v1/bank/applications/{draft['id']}/alternatives/{alternative['id']}/offer",
+        headers=employee_headers,
+    )
+    assert offered.status_code == 200 and offered.json()["status"] == "OFFERED"
+
+    wrong_owner = auth_headers(client, "client2", SECOND_PASSWORD)
+    assert client.get(f"/api/v1/applications/{draft['id']}/alternative-offer",
+                      headers=wrong_owner).status_code == 404
+    visible = client.get(f"/api/v1/applications/{draft['id']}/alternative-offer", headers=headers)
+    assert visible.status_code == 200 and visible.json()["id"] == alternative["id"]
+    accepted = client.post(
+        f"/api/v1/applications/{draft['id']}/alternative-offers/{alternative['id']}/decision",
+        headers=headers, json={"decision": "ACCEPTED"},
+    )
+    assert accepted.status_code == 200 and accepted.json()["status"] == "ACCEPTED"
+    assert client.post(
+        f"/api/v1/applications/{draft['id']}/alternative-offers/{alternative['id']}/decision",
+        headers=headers, json={"decision": "DECLINED"},
+    ).status_code == 409
+
+    unchanged = client.get(f"/api/v1/applications/{draft['id']}", headers=headers).json()
+    assert unchanged["status"] == "UNDER_REVIEW"
+    assert unchanged["requested_amount"] == "5000000.00"
+    assert unchanged["term_months"] == 24
+    approved = client.post(f"/api/v1/bank/applications/{draft['id']}/decision", headers=employee_headers,
+                           json={"decision": "APPROVED"})
+    assert approved.status_code == 200 and approved.json()["status"] == "APPROVED"
+    with application.state.session_factory() as session:
+        review = session.scalar(select(ReviewAction).where(ReviewAction.application_id == UUID(draft["id"])))
+        assert review.action == "APPROVED"
+        assert review.approved_amount == Decimal(alternative["amount"])
+        assert review.approved_term_months == alternative["term_months"]
+        event_types = set(session.scalars(select(AuditLog.event_type).where(
+            AuditLog.application_id == UUID(draft["id"]),
+        )))
+        assert {"ALTERNATIVES_GENERATED", "ALTERNATIVE_OFFERED", "ALTERNATIVE_ACCEPTED"} <= event_types
+        assert session.scalar(select(func.count()).select_from(ApplicationEvent).where(
+            ApplicationEvent.application_id == UUID(draft["id"]),
+            ApplicationEvent.event_type == "ALTERNATIVE_ACCEPTED",
+        )) == 1
+        assert session.scalar(select(func.count()).select_from(AlternativeOffer).where(
+            AlternativeOffer.application_id == UUID(draft["id"]),
+            AlternativeOffer.status == "ACCEPTED",
+        )) == 1
+
+
+def test_alternative_engine_blocks_non_adjustable_credit_and_compliance_stops(client):
+    headers = auth_headers(client, "client2", SECOND_PASSWORD)
+    draft = create(client, headers, {
+        "product_code": "working_capital", "requested_amount": "5000000.00", "term_months": 24,
+        "purpose": "Оборотные средства", "average_monthly_revenue": "1000000.00",
+        "average_monthly_operating_expenses": "600000.00", "existing_monthly_debt_payment": "50000.00",
+    })
+    employee_headers = auth_headers(client, "employee", EMPLOYEE_PASSWORD)
+    submitted = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers,
+                            json={"credit_history_consent": True})
+    assert submitted.status_code == 200
+    generated = client.post(f"/api/v1/bank/applications/{draft['id']}/alternatives/generate",
+                            headers=employee_headers)
+    assert generated.status_code == 200
+    assert generated.json()["status"] == "BLOCKED"
+    assert generated.json()["alternatives"] == []
+
+
+def test_alternative_engine_does_not_generate_when_original_conditions_pass(client, headers):
+    draft = create(client, headers, {
+        "product_code": "working_capital", "requested_amount": "300000.00", "term_months": 12,
+        "purpose": "Оборотные средства", "average_monthly_revenue": "1000000.00",
+        "average_monthly_operating_expenses": "600000.00", "existing_monthly_debt_payment": "50000.00",
+    })
+    assert client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers,
+                       json={"credit_history_consent": True}).status_code == 200
+    employee_headers = auth_headers(client, "employee", EMPLOYEE_PASSWORD)
+    generated = client.post(f"/api/v1/bank/applications/{draft['id']}/alternatives/generate",
+                            headers=employee_headers)
+    assert generated.status_code == 200
+    assert generated.json()["status"] == "NOT_REQUIRED"
+    assert generated.json()["alternatives"] == []
+
+
+def test_client_can_decline_alternative_without_changing_application_conditions(client, headers):
+    draft = create(client, headers, {
+        "product_code": "working_capital", "requested_amount": "5000000.00", "term_months": 24,
+        "purpose": "Оборотные средства", "average_monthly_revenue": "1000000.00",
+        "average_monthly_operating_expenses": "600000.00", "existing_monthly_debt_payment": "50000.00",
+    })
+    assert client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers,
+                       json={"credit_history_consent": True}).status_code == 200
+    employee_headers = auth_headers(client, "employee", EMPLOYEE_PASSWORD)
+    generated = client.post(f"/api/v1/bank/applications/{draft['id']}/alternatives/generate",
+                            headers=employee_headers).json()
+    alternative = generated["alternatives"][0]
+    assert client.post(
+        f"/api/v1/bank/applications/{draft['id']}/alternatives/{alternative['id']}/offer",
+        headers=employee_headers,
+    ).status_code == 200
+    declined = client.post(
+        f"/api/v1/applications/{draft['id']}/alternative-offers/{alternative['id']}/decision",
+        headers=headers, json={"decision": "DECLINED", "comment": "Оставляю исходные условия."},
+    )
+    assert declined.status_code == 200
+    assert declined.json()["status"] == "DECLINED"
+    assert declined.json()["decision_comment"] == "Оставляю исходные условия."
+    unchanged = client.get(f"/api/v1/applications/{draft['id']}", headers=headers).json()
+    assert unchanged["status"] == "UNDER_REVIEW"
+    assert unchanged["requested_amount"] == "5000000.00"
+    assert unchanged["term_months"] == 24
+    events = client.get(f"/api/v1/applications/{draft['id']}/events", headers=headers).json()
+    assert any(event["event_type"] == "ALTERNATIVE_DECLINED" for event in events)

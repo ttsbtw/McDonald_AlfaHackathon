@@ -113,7 +113,7 @@ class ApplicationEventOut(APIModel):
     application_revision: int
     event_type: Literal[
         "DRAFT_CREATED", "DRAFT_UPDATED", "SUBMITTED", "RESUBMITTED",
-        "INFO_REQUESTED", "APPROVED", "REJECTED",
+        "INFO_REQUESTED", "APPROVED", "REJECTED", "ALTERNATIVE_ACCEPTED", "ALTERNATIVE_DECLINED",
     ]
     from_status: Literal["DRAFT", "SUBMITTED", "UNDER_REVIEW", "NEEDS_INFO", "APPROVED", "REJECTED"] | None
     to_status: Literal["DRAFT", "SUBMITTED", "UNDER_REVIEW", "NEEDS_INFO", "APPROVED", "REJECTED"]
@@ -172,6 +172,62 @@ class SubmitIn(APIModel):
 class ComplianceReviewIn(APIModel):
     outcome: Literal["CLEAR", "CONFIRMED_MATCH"]
     comment: str = Field(min_length=1, max_length=1000)
+
+
+class AlternativeDecisionIn(APIModel):
+    decision: Literal["ACCEPTED", "DECLINED"]
+    comment: str | None = Field(default=None, max_length=1000)
+
+
+class AlternativeCandidateOut(APIModel):
+    id: UUID
+    assessment_id: UUID
+    generation_id: UUID
+    position: int
+    amount: PositiveMoney
+    term_months: Term
+    annual_interest_rate: Decimal
+    monthly_payment: Money
+    debt_burden: Decimal | None
+    reason_code: str
+    reason: str
+    differences: dict
+    evaluation: dict
+    versions: dict
+    status: Literal["GENERATED", "OFFERED", "ACCEPTED", "DECLINED", "SUPERSEDED"]
+    created_at: datetime
+    offered_at: datetime | None
+    decided_at: datetime | None
+    decision_comment: str | None
+
+
+class AlternativeSetOut(APIModel):
+    application_id: UUID
+    assessment_id: UUID | None = None
+    generation_id: UUID | None = None
+    status: Literal["NOT_GENERATED", "AVAILABLE", "NOT_REQUIRED", "BLOCKED", "NO_ALTERNATIVES"]
+    reason_code: str | None = None
+    reason: str | None = None
+    original: dict | None = None
+    versions: dict = Field(default_factory=dict)
+    alternatives: list[AlternativeCandidateOut] = Field(default_factory=list)
+    active_offer: AlternativeCandidateOut | None = None
+
+
+class ClientAlternativeOfferOut(APIModel):
+    id: UUID
+    amount: PositiveMoney
+    term_months: Term
+    annual_interest_rate: Decimal
+    monthly_payment: Money
+    debt_burden: Decimal | None
+    reason: str
+    differences: dict
+    status: Literal["OFFERED", "ACCEPTED", "DECLINED"]
+    is_demo: bool
+    offered_at: datetime | None
+    decided_at: datetime | None
+    decision_comment: str | None
 
 
 class FieldError(APIModel):
