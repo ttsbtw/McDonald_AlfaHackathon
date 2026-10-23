@@ -4,6 +4,10 @@
 flowchart LR
     Browser[Кабинеты клиента и сотрудника] --> API[FastAPI]
     API --> Auth[Проверка токена и пользователя]
+    API --> Pipeline[app.pipeline: обработка заявки]
+    Pipeline --> Checks[app.checks: синтетические BKI и Compliance]
+    Pipeline --> Scoring[app.scoring: риск-оценка]
+    Pipeline --> UW[app.underwriting: внутренние правила]
     API --> ORM[SQLAlchemy]
     ORM --> PG[(PostgreSQL)]
     Alembic[Миграции Alembic] --> PG
@@ -23,10 +27,13 @@ erDiagram
     CREDIT_PRODUCTS o|--o{ APPLICATIONS : selected
     APPLICATIONS ||--o{ ASSESSMENTS : assessed_as
     APPLICATIONS ||--o{ APPLICATION_EVENTS : records
+    APPLICATIONS ||--o{ AUDIT_LOGS : records
+    APPLICATIONS ||--o{ COMPLIANCE_REVIEWS : screened
     APPLICATIONS ||--o{ REVIEW_ACTIONS : reviewed_by
     ASSESSMENTS ||--o{ REVIEW_ACTIONS : used_for
     USERS ||--o{ REVIEW_ACTIONS : decides
     USERS ||--o{ APPLICATION_EVENTS : acts
+    USERS o|--o{ AUDIT_LOGS : initiates
     USERS {
         uuid id PK
         string username UK
@@ -100,12 +107,36 @@ erDiagram
         numeric annual_interest_rate
         timestamptz created_at
     }
+    AUDIT_LOGS {
+        uuid id PK
+        uuid application_id FK
+        string client_identifier
+        uuid actor_id FK
+        string event_type
+        string source
+        jsonb payload
+        timestamptz created_at
+    }
+    COMPLIANCE_REVIEWS {
+        uuid id PK
+        uuid application_id FK
+        uuid assessment_id FK
+        uuid employee_id FK
+        string outcome
+        text comment
+        timestamptz created_at
+    }
 ```
 
 Составной внешний ключ `(company_id, owner_id)` дополнительно запрещает связать
 заявку с компанией другого пользователя даже при ошибке прикладного кода.
 Деньги хранятся в NUMERIC(15, 2), даты событий — TIMESTAMPTZ; API нормализует UTC.
 JSONB используется только для серверных условий скоринга, не вместо колонок анкеты.
+
+Кредитный конвейер вызывает `checks.bki`, `checks.compliance`, затем
+`scoring.assess_application` и `underwriting.evaluate_underwriting`. Он хранит
+результат каждой проверки в `audit_logs`, а скоринговый снимок и объяснения — в
+`assessments`. Экспорт аудита сотруднику доступен как JSON и CSV.
 
 Клиент создаёт черновики, редактирует их в `DRAFT`/`NEEDS_INFO` и отправляет
 полную анкету. Backend сохраняет оценку и переводит заявку в `UNDER_REVIEW`.
