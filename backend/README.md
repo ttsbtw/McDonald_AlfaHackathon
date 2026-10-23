@@ -140,6 +140,7 @@ docker compose up -d
 | PATCH | `/api/v1/applications/{id}` | Своя заявка в DRAFT/NEEDS_INFO, с revision |
 | POST | `/api/v1/applications/{id}/submit` | Полнота анкеты, локальные проверки, скоринг и передача в рассмотрение |
 | GET | `/api/v1/bank/applications` | Очередь сотрудника; фильтр по статусу, limit 1–100, offset >=0 |
+| GET | `/api/v1/bank/companies/{company_id}/history` | История отправленных заявок компании; limit 1–100, offset >=0 |
 | GET | `/api/v1/bank/applications/{id}` | Карточка заявки с клиентом, компанией, продуктом и последней оценкой |
 | GET | `/api/v1/bank/applications/{id}/assessments` | Все оценки заявки, от новой к старой |
 | GET | `/api/v1/bank/applications/{id}/audit?format=json` | Журнал проверок и этапов конвейера; поддерживается также `format=csv` |
@@ -151,6 +152,14 @@ docker compose up -d
 | POST | `/api/v1/bank/applications/{id}/alternatives/{alternative_id}/offer` | Передать выбранный вариант клиенту |
 | GET | `/api/v1/applications/{id}/alternative-offer` | Получить своё предложение и его состояние |
 | POST | `/api/v1/applications/{id}/alternative-offers/{alternative_id}/decision` | Принять или отклонить предложенные условия |
+
+История компании доступна только сотруднику банка и собирается по внутреннему
+`company_id`. В неё входят все отправленные заявки компании, кроме черновиков,
+в порядке от новых к старым. Ответ содержит исходные и одобренные условия,
+последнюю оценку и дату последней отправки; `limit` и `offset` позволяют
+постранично загружать длинную историю. Детали проверок, событий и альтернатив
+открываются в карточке соответствующей заявки. Отдельное аналитическое хранилище
+для этого сценария не используется.
 
 При создании все поля анкеты необязательны: `product_code`, `requested_amount`,
 `term_months`, `purpose`, `average_monthly_revenue`,

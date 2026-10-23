@@ -281,6 +281,23 @@ def bank_application_out(row, approved_action=None, approved_risk_level=None):
     )
 
 
+def latest_submission_times(db, application_ids):
+    if not application_ids:
+        return {}
+    events = db.scalars(
+        select(ApplicationEvent)
+        .where(
+            ApplicationEvent.application_id.in_(application_ids),
+            ApplicationEvent.event_type.in_(("SUBMITTED", "RESUBMITTED")),
+        )
+        .order_by(ApplicationEvent.created_at.desc(), ApplicationEvent.id.desc())
+    ).all()
+    latest = {}
+    for event in events:
+        latest.setdefault(event.application_id, event.created_at)
+    return latest
+
+
 @router.get("/bank/applications", response_model=BankApplicationPage, tags=["Рабочее место сотрудника"])
 def bank_applications(
     db: DB,
@@ -305,6 +322,46 @@ def bank_applications(
                   for row in items],
         "total": total, "limit": limit, "offset": offset,
     }
+
+
+@router.get("/bank/companies/{company_id}/history", response_model=BankApplicationPage,
+            tags=["Рабочее место сотрудника"])
+def bank_company_history(
+    company_id: UUID,
+    db: DB,
+    user: BankEmployee,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    if db.get(Company, company_id) is None:
+        raise APIError(404, "COMPANY_NOT_FOUND", "Компания не найдена.")
+    filters = [Application.company_id == company_id, Application.status != "DRAFT"]
+    items = db.execute(
+        bank_application_query().where(*filters)
+        .order_by(Application.created_at.desc(), Application.id.desc())
+        .limit(limit).offset(offset)
+    ).all()
+    applications = [row[0] for row in items]
+    approved_actions = approved_actions_by_application(db, applications)
+    approved_risks = approved_alternative_risks_by_application(db, applications)
+    submitted_at = latest_submission_times(db, [item.id for item in applications])
+    total = db.scalar(select(func.count()).select_from(Application).where(*filters))
+    return {
+        "items": [
+            history_item(row, approved_actions, approved_risks, submitted_at)
+            for row in items
+        ],
+        "total": total, "limit": limit, "offset": offset,
+    }
+
+
+def history_item(row, approved_actions, approved_risks, submitted_at):
+    item = row[0]
+    payload = bank_application_out(
+        row, approved_actions.get(item.id), approved_risks.get(item.id),
+    ).model_dump()
+    payload["submitted_at"] = submitted_at.get(item.id)
+    return BankApplicationOut(**payload)
 
 
 @router.get("/bank/applications/{application_id}", response_model=BankApplicationOut, tags=["Рабочее место сотрудника"])
