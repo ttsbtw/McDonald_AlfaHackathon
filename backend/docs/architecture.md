@@ -8,6 +8,9 @@ flowchart LR
     Pipeline --> Checks[app.checks: синтетические BKI и Compliance]
     Pipeline --> Scoring[app.scoring: риск-оценка]
     Pipeline --> UW[app.underwriting: внутренние правила]
+    API --> Alternatives[app.alternatives: подбор условий]
+    Alternatives --> Scoring[app.scoring: повторная оценка]
+    Alternatives --> UW
     API --> ORM[SQLAlchemy]
     ORM --> PG[(PostgreSQL)]
     Alembic[Миграции Alembic] --> PG
@@ -30,8 +33,11 @@ erDiagram
     APPLICATIONS ||--o{ AUDIT_LOGS : records
     APPLICATIONS ||--o{ COMPLIANCE_REVIEWS : screened
     APPLICATIONS ||--o{ REVIEW_ACTIONS : reviewed_by
+    APPLICATIONS ||--o{ ALTERNATIVE_OFFERS : proposes
     ASSESSMENTS ||--o{ REVIEW_ACTIONS : used_for
+    ASSESSMENTS ||--o{ ALTERNATIVE_OFFERS : evaluated_for
     USERS ||--o{ REVIEW_ACTIONS : decides
+    USERS ||--o{ ALTERNATIVE_OFFERS : generates
     USERS ||--o{ APPLICATION_EVENTS : acts
     USERS o|--o{ AUDIT_LOGS : initiates
     USERS {
@@ -126,6 +132,28 @@ erDiagram
         text comment
         timestamptz created_at
     }
+    ALTERNATIVE_OFFERS {
+        uuid id PK
+        uuid application_id FK
+        uuid assessment_id FK
+        uuid generation_id
+        uuid employee_id FK
+        int position
+        numeric amount
+        int term_months
+        numeric annual_interest_rate
+        numeric monthly_payment
+        numeric debt_burden
+        string reason_code
+        text reason
+        string status
+        jsonb differences
+        jsonb evaluation
+        jsonb versions
+        timestamptz created_at
+        timestamptz offered_at
+        timestamptz decided_at
+    }
 ```
 
 Составной внешний ключ `(company_id, owner_id)` дополнительно запрещает связать
@@ -137,6 +165,17 @@ JSONB используется только для серверных услов
 `scoring.assess_application` и `underwriting.evaluate_underwriting`. Он хранит
 результат каждой проверки в `audit_logs`, а скоринговый снимок и объяснения — в
 `assessments`. Экспорт аудита сотруднику доступен как JSON и CSV.
+
+Модуль `app.alternatives` рассматривает только изменения суммы и срока. Он
+использует аннуитетную формулу скоркарда, повторно рассчитывает скоринг и
+underwriting для каждого кандидата и возвращает максимум три безопасных
+варианта. Текущая просрочка, неуспешные или неизвестные проверки, совпадение
+Compliance, стоп-лист и другие неустранимые правила блокируют предложения.
+Генерация, отправка сотрудником и ответ клиента сохраняются в
+`alternative_offers` и `audit_logs` с привязкой к исходной оценке и версиям
+алгоритмов. Клиентское принятие не меняет сумму, срок или статус исходной заявки;
+окончательное решение по-прежнему принимает сотрудник. При одобрении после
+принятия предложения условия из принятого варианта сохраняются в `review_actions`.
 
 Клиент создаёт черновики, редактирует их в `DRAFT`/`NEEDS_INFO` и отправляет
 полную анкету. Backend сохраняет оценку и переводит заявку в `UNDER_REVIEW`.
