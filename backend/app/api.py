@@ -131,6 +131,32 @@ def own_application(db, user, application_id):
     return item
 
 
+def approved_actions_by_application(db, items):
+    application_ids = [item.id for item in items]
+    if not application_ids:
+        return {}
+    actions = db.scalars(
+        select(ReviewAction)
+        .where(ReviewAction.application_id.in_(application_ids), ReviewAction.action == "APPROVED")
+        .order_by(ReviewAction.created_at.desc(), ReviewAction.id.desc())
+    ).all()
+    latest = {}
+    for action in actions:
+        latest.setdefault(action.application_id, action)
+    return latest
+
+
+def client_application_out(item, approved_action=None):
+    payload = DraftOut.model_validate(item).model_dump()
+    if approved_action is not None:
+        payload.update(
+            approved_amount=approved_action.approved_amount,
+            approved_term_months=approved_action.approved_term_months,
+            approved_annual_interest_rate=approved_action.annual_interest_rate,
+        )
+    return DraftOut(**payload)
+
+
 @router.post("/applications", response_model=DraftOut, status_code=201, tags=["Черновики"])
 def create_draft(payload: DraftCreate, db: DB, user: Client, response: Response):
     company = own_company(db, user)
@@ -156,13 +182,19 @@ def list_drafts(db: DB, user: Client,
     query = select(Application).where(Application.owner_id == user.id)
     items = db.scalars(query.order_by(Application.created_at.desc(), Application.id)
                        .limit(limit).offset(offset)).all()
+    approved_actions = approved_actions_by_application(db, items)
     total = db.scalar(select(func.count()).select_from(Application).where(Application.owner_id == user.id))
-    return {"items": items, "total": total, "limit": limit, "offset": offset}
+    return {
+        "items": [client_application_out(item, approved_actions.get(item.id)) for item in items],
+        "total": total, "limit": limit, "offset": offset,
+    }
 
 
 @router.get("/applications/{application_id}", response_model=DraftOut, tags=["Черновики"])
 def get_draft(application_id: UUID, db: DB, user: Client):
-    return own_application(db, user, application_id)
+    item = own_application(db, user, application_id)
+    approved_action = approved_actions_by_application(db, [item]).get(item.id)
+    return client_application_out(item, approved_action)
 
 
 @router.delete("/applications/{application_id}", status_code=204, response_class=Response, tags=["Черновики"])

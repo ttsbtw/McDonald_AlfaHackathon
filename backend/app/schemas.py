@@ -94,6 +94,9 @@ class DraftOut(DraftFields):
     revision: int
     created_at: datetime
     updated_at: datetime
+    approved_amount: PositiveMoney | None = None
+    approved_term_months: Term | None = None
+    approved_annual_interest_rate: Decimal | None = None
 
     @field_validator("created_at", "updated_at")
     @classmethod

@@ -3111,6 +3111,41 @@
               }
             ],
             "title": "Preliminary Decision"
+          },
+          "approved_amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved Amount"
+          },
+          "approved_term_months": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 360.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved Term Months"
+          },
+          "approved_annual_interest_rate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved Annual Interest Rate"
           }
         },
         "additionalProperties": false,
@@ -3637,6 +3672,41 @@
             "type": "string",
             "format": "date-time",
             "title": "Updated At"
+          },
+          "approved_amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved Amount"
+          },
+          "approved_term_months": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 360.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved Term Months"
+          },
+          "approved_annual_interest_rate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved Annual Interest Rate"
           }
         },
         "additionalProperties": false,

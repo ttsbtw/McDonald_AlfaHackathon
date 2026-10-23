@@ -287,6 +287,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
     {status === "REJECTED" && <Alert title="Комментарий банка">{infoRequest.loading ? "Загружаем сообщение сотрудника…" : infoRequest.error ? `Не удалось загрузить сообщение: ${infoRequest.error}` : infoRequest.message || "Сотрудник не добавил комментарий к решению."}</Alert>}
     {status === "UNDER_REVIEW" && alternativeError && <Alert type="error">Не удалось загрузить предложение: {alternativeError}</Alert>}
     {status === "UNDER_REVIEW" && alternativeOffer && <ClientAlternativeCard offer={alternativeOffer} busy={alternativeBusy} onDecision={decideAlternative} />}
+    {status === "APPROVED" && application?.approved_amount !== null && application?.approved_amount !== undefined && <ApprovedConditions application={application} />}
     <form className="application-layout" onSubmit={save}>
       <div className="application-main">
         <section className="panel form-section"><div className="form-section__heading"><span>01</span><div><h2>Компания</h2><p>Сведения действующего клиента</p></div></div><div className="company-card"><b>{company.name}</b><span>{company.legal_form} · ИНН {company.inn}</span><small>Работает с {new Date(company.registration_date).toLocaleDateString("ru-RU")}</small></div></section>
@@ -298,6 +299,22 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
   </div>;
 }
 
+function ApprovedConditions({ application }) {
+  const requestedAmount = formatMoney(application.requested_amount);
+  const requestedTerm = `${application.term_months || "—"} мес.`;
+  const approvedAmount = formatMoney(application.approved_amount);
+  const approvedTerm = `${application.approved_term_months} мес.`;
+  return <section className="panel approval-terms">
+    <div className="approval-terms__heading"><span className="eyebrow eyebrow--red">Решение банка</span><h2>Условия одобрения</h2><p>Банк одобрил финансирование на изменённых условиях.</p></div>
+    <div className="approval-terms__flow">
+      <div className="approval-terms__side approval-terms__side--requested"><small>Запрошено</small><strong><s>{requestedAmount}</s></strong><span><s>{requestedTerm}</s></span></div>
+      <span className="approval-terms__arrow" aria-label="Изменено на">→</span>
+      <div className="approval-terms__side approval-terms__side--approved"><small>Одобрено</small><strong>{approvedAmount}</strong><span>{approvedTerm}</span><small>Ставка {formatPercent(Number(application.approved_annual_interest_rate) / 100)} годовых</small></div>
+    </div>
+    <p className="approval-terms__note">Исходные параметры заявки сохранены в анкете ниже.</p>
+  </section>;
+}
+
 function ClientAlternativeCard({ offer, busy, onDecision }) {
   const pending = offer.status === "OFFERED";
   const title = pending ? "Банк предлагает изменить условия" : offer.status === "ACCEPTED" ? "Вы приняли альтернативные условия" : "Вы отказались от альтернативных условий";
@@ -306,14 +323,40 @@ function ClientAlternativeCard({ offer, busy, onDecision }) {
 
 function Dashboard({ company, applications, onNew, onOpen }) {
   return <div className="content"><section className="client-hero"><div><span className="eyebrow">Кабинет предпринимателя</span><h1>Здравствуйте,<br />{company.name}</h1><p>Подберите финансирование и следите за решением без звонков и визитов.</p><Button onClick={onNew}>Подобрать финансирование</Button></div><div className="hero-shape" aria-hidden="true"><b>₽</b><i /><i /></div></section>
-    <section className="dashboard-section"><div className="section-title"><div><span className="eyebrow eyebrow--red">Мои заявки</span><h2>История финансирования</h2></div><span>{applications.length}</span></div>{applications.length ? <div className="application-list">{applications.map((item) => <button key={item.id} onClick={() => onOpen(item)}><div><StatusBadge status={item.status} /><h3>{item.purpose || "Заявка без названия"}</h3><span>{formatMoney(item.requested_amount)} · {item.term_months || "—"} мес.</span></div><div><small>Обновлена</small><b>{new Date(item.updated_at).toLocaleDateString("ru-RU")}</b><i>→</i></div></button>)}</div> : <EmptyState icon="₽" title="Заявок пока нет" action={<Button onClick={onNew}>Начать подбор</Button>}>Начните с потребности — сумму, срок и продукт подберём на следующем шаге.</EmptyState>}</section>
+    <section className="dashboard-section"><div className="section-title"><div><span className="eyebrow eyebrow--red">Мои заявки</span><h2>История финансирования</h2></div><span>{applications.length}</span></div>{applications.length ? <div className="application-list">{applications.map((item) => <button key={item.id} onClick={() => onOpen(item)}><div><StatusBadge status={item.status} /><h3>{item.purpose || "Заявка без названия"}</h3><ApplicationTerms item={item} compact /></div><div><small>Обновлена</small><b>{new Date(item.updated_at).toLocaleDateString("ru-RU")}</b><i>→</i></div></button>)}</div> : <EmptyState icon="₽" title="Заявок пока нет" action={<Button onClick={onNew}>Начать подбор</Button>}>Начните с потребности — сумму, срок и продукт подберём на следующем шаге.</EmptyState>}</section>
   </div>;
+}
+
+function ApplicationTerms({ item, compact = false }) {
+  const requested = `${formatMoney(item.requested_amount)} · ${item.term_months || "—"} мес.`;
+  const hasApproval = item.approved_amount !== null && item.approved_amount !== undefined;
+  if (!hasApproval) return <span className="application-terms__plain">Запрошено: {requested}</span>;
+
+  const approved = `${formatMoney(item.approved_amount)} · ${item.approved_term_months} мес.`;
+  return <span className={`application-terms${compact ? " application-terms--compact" : ""}`}>
+    <span className="application-terms__requested"><small>Запрошено</small><s>{requested}</s></span>
+    <span className="application-terms__arrow" aria-hidden="true">→</span>
+    <span className="application-terms__approved"><small>Одобрено</small><strong>{approved}</strong></span>
+  </span>;
 }
 
 export default function ClientWorkspace({ pathname, navigate }) {
   const [data, setData] = useState(null); const [error, setError] = useState(""); const [selection, setSelection] = useState(null); const [needSnapshot, setNeedSnapshot] = useState(null); const [formSnapshot, setFormSnapshot] = useState(null);
   async function load() { setError(""); try { const [company, products, page] = await Promise.all([api.company(), api.products(), api.applications()]); setData({ company, products, applications: page.items }); } catch (err) { setError(err.message); } }
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    const refreshApplications = async () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        const page = await api.applications();
+        setData((current) => current ? { ...current, applications: page.items } : current);
+      } catch {
+        // Keep the current screen usable; the next refresh can recover.
+      }
+    };
+    const timer = window.setInterval(refreshApplications, 5000);
+    return () => window.clearInterval(timer);
+  }, []);
   useEffect(() => { if (data && pathname === "/client/new/application" && !selection) navigate("/client/new", { replace: true }); }, [data, pathname, selection, navigate]);
   if (error) return <div className="content"><Alert type="error">{error}</Alert><Button onClick={load}>Повторить</Button></div>;
   if (!data) return <div className="content"><Skeleton rows={5} /></div>;
