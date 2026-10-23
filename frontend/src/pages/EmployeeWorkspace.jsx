@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client.js";
+import { Accordion } from "@alfalab/core-components-accordion";
 import { Alert, Button, EmptyState, Field, Skeleton, StatusBadge, Toast } from "../components/UI.jsx";
 import { approvalBlockReason, latestComplianceReview, requiresComplianceReview } from "../domain/pipeline.js";
 
@@ -64,6 +65,21 @@ function ReviewValue({ original, value, money = false }) {
 function BankApplicationRisk({ item }) {
   if (item.status === "APPROVED" && hasChangedApprovedTerms(item) && item.approved_risk_level) return <span className="bank-table__risk-change"><s className={`risk risk--${String(item.risk_level || "unknown").toLowerCase()}`}>{riskLabels[item.risk_level] || "—"}</s><b>→</b><span className={`risk risk--${String(item.approved_risk_level).toLowerCase()}`}>{riskLabels[item.approved_risk_level]}</span></span>;
   return <span className={`risk risk--${String(item.risk_level || "unknown").toLowerCase()}`}>{riskLabels[item.risk_level] || "—"}</span>;
+}
+
+function CollapsiblePanel({ className = "", eyebrow, title, description, summary, children }) {
+  return <Accordion
+    className={`panel employee-accordion ${className}`.trim()}
+    containerClassName="employee-accordion__trigger"
+    headerClassName="employee-accordion__header"
+    bodyContentClassName="employee-accordion__content"
+    header={<div className="employee-accordion__heading">
+      {eyebrow && <span className="eyebrow eyebrow--red">{eyebrow}</span>}
+      <div className="employee-accordion__title-row"><h2>{title}</h2>{summary && <span className="employee-accordion__summary">{summary}</span>}</div>
+      {description && <p>{description}</p>}
+    </div>}
+    defaultExpanded={false}
+  >{children}</Accordion>;
 }
 
 function ApplicationTable({ title, items, navigate }) {
@@ -218,8 +234,7 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
 }
 
 function CompanyHistoryPanel({ items, total, loading, moreLoading, error, currentApplicationId, onOpen, onRetry, onLoadMore }) {
-  return <section className="panel company-history">
-    <div className="panel-title"><div><span className="eyebrow eyebrow--red">Клиент</span><h2>История обращений</h2><p>Заявки компании и сохранённые результаты предыдущих рассмотрений.</p></div>{items && <span className="company-history__count">{total}</span>}</div>
+  return <CollapsiblePanel className="company-history" eyebrow="Клиент" title="История обращений" description="Заявки компании и сохранённые результаты предыдущих рассмотрений." summary={items && <span className="company-history__count">{total}</span>}>
     {error && <><Alert type="error">{error}</Alert><Button variant="secondary" onClick={onRetry}>Повторить</Button></>}
     {loading && !items ? <Skeleton rows={2} /> : items?.length ? <>
       <ol className="company-history__list">{items.map((item) => <li key={item.id}>
@@ -236,7 +251,7 @@ function CompanyHistoryPanel({ items, total, loading, moreLoading, error, curren
       </li>)}</ol>
       {items.length < total && <Button variant="secondary" busy={moreLoading} onClick={onLoadMore}>Показать ещё обращения</Button>}
     </> : !error && <EmptyState icon="◷" title="Предыдущих обращений нет">Это первое отправленное обращение компании.</EmptyState>}
-  </section>;
+  </CollapsiblePanel>;
 }
 
 function DecisionOverview({ application, assessment }) {
@@ -246,15 +261,15 @@ function DecisionOverview({ application, assessment }) {
 }
 
 function ChecksPanel({ assessment }) {
-  if (!assessment) return <section className="panel"><h2>Проверки</h2><p className="muted">Результаты ещё не сформированы.</p></section>;
+  if (!assessment) return <CollapsiblePanel title="Проверки" eyebrow="Обязательные проверки"><p className="muted">Результаты ещё не сформированы.</p></CollapsiblePanel>;
   const result = assessment.result || {};
   const bki = result.check_reports?.bki;
   const compliance = result.check_reports?.compliance;
   const underwriting = result.underwriting || {};
-  return <section className="panel checks-panel"><div className="panel-title"><div><span className="eyebrow eyebrow--red">Обязательные проверки</span><h2>БКИ, комплаенс и правила кредитования</h2></div><span className={`result-pill result-pill--${String(underwriting.status || "unknown").toLowerCase()}`}>{underwritingLabels[underwriting.status] || "Нет результата"}</span></div><div className="check-report-grid">
+  return <CollapsiblePanel className="checks-panel" eyebrow="Обязательные проверки" title="БКИ, комплаенс и правила кредитования" summary={<span className={`result-pill result-pill--${String(underwriting.status || "unknown").toLowerCase()}`}>{underwritingLabels[underwriting.status] || "Нет результата"}</span>}><div className="check-report-grid">
     <article><div><span>БКИ</span><b className={`result-text result-text--${reportTone(bki?.status)}`}>{reportStatusLabels[bki?.status] || "Нет результата"}</b></div><dl><div><dt>Согласие</dt><dd>{bki?.consent_confirmed ? "Получено" : "Не получено"}</dd></div><div><dt>Текущая просрочка</dt><dd>{formatMoneyRub(bki?.current_overdue_amount || 0)}</dd></div><div><dt>Макс. просрочка</dt><dd>{bki?.max_overdue_days_12m === null || bki?.max_overdue_days_12m === undefined ? "—" : `${bki.max_overdue_days_12m} дн.`}</dd></div></dl><p>{["ERROR", "UNAVAILABLE"].includes(bki?.status) ? "Техническая недоступность требует ручной проверки и не считается отказом." : checkReasonLabels[bki?.reason_code] || "Синтетический отчёт кредитной истории."}</p></article>
     <article><div><span>Комплаенс</span><b className={`result-text result-text--${reportTone(compliance?.status)}`}>{reportStatusLabels[compliance?.status] || "Нет результата"}</b></div><dl><div><dt>Ручной разбор</dt><dd>{compliance?.requires_manual_review || compliance?.status === "ERROR" ? "Требуется" : "Не требуется"}</dd></div><div><dt>Источник</dt><dd>Синтетический реестр</dd></div></dl><p>{compliance?.explanation || (compliance?.status === "ERROR" ? "Техническая ошибка требует ручного разбора и не означает отказ." : "Совпадений в демо-реестре нет.")}</p></article>
-  </div><div className="underwriting-rules"><h3>Правила кредитования</h3>{underwriting.rules?.length ? underwriting.rules.map((rule) => <div key={rule.code}><span className={`rule-outcome rule-outcome--${String(rule.outcome).toLowerCase()}`}>{outcomeLabels[rule.outcome] || "Результат"}</span><div><strong>{underwritingRuleLabels[rule.code] || "Дополнительная проверка"}</strong><p>{rule.explanation || "Результат правила сохранён в оценке."}</p></div></div>) : <p className="muted">Правила не рассчитаны.</p>}</div></section>;
+  </div><div className="underwriting-rules"><h3>Правила кредитования</h3>{underwriting.rules?.length ? underwriting.rules.map((rule) => <div key={rule.code}><span className={`rule-outcome rule-outcome--${String(rule.outcome).toLowerCase()}`}>{outcomeLabels[rule.outcome] || "Результат"}</span><div><strong>{underwritingRuleLabels[rule.code] || "Дополнительная проверка"}</strong><p>{rule.explanation || "Результат правила сохранён в оценке."}</p></div></div>) : <p className="muted">Правила не рассчитаны.</p>}</div></CollapsiblePanel>;
 }
 function reportTone(status) { if (["AVAILABLE", "NO_HISTORY", "CLEAR"].includes(status)) return "pass"; if (["POTENTIAL_MATCH", "CONFIRMED_MATCH", "ERROR", "UNAVAILABLE"].includes(status)) return "review"; return "unknown"; }
 
@@ -270,7 +285,10 @@ function AuditPanel({ id, audit, onError }) {
   const [downloading, setDownloading] = useState("");
   async function download(format) { setDownloading(format); onError(""); try { await api.downloadBankAudit(id, format); } catch (err) { onError(err.message); } finally { setDownloading(""); } }
   const records = audit?.records || [];
-  return <section className="panel audit-panel"><div className="panel-title"><div><span className="eyebrow eyebrow--red">Контроль</span><h2>Журнал аудита</h2><p>Полный журнал доступен для выгрузки.</p></div><div className="audit-panel__actions"><Button variant="secondary" busy={downloading === "json"} onClick={() => download("json")}>Скачать JSON</Button><Button variant="secondary" busy={downloading === "csv"} onClick={() => download("csv")}>Скачать CSV</Button></div></div>{records.length ? <ol>{records.slice(-12).reverse().map((record) => <li key={record.id}><i /><div><strong>{auditLabels[record.event_type] || "Событие процесса"}</strong><span>{new Date(record.created_at).toLocaleString("ru-RU")} · {auditSourceLabels[record.source] || "Внутренняя система"}</span>{record.event_type === "COMPLIANCE_REVIEW" && <p>{complianceOutcomeLabels[record.payload?.outcome] || "Результат сохранён"}: {record.payload?.comment || "Без комментария"}</p>}{record.event_type === "PIPELINE_ERROR" && <p>Техническая ошибка направлена на ручную проверку.</p>}</div></li>)}</ol> : <EmptyState icon="≡" title="Событий пока нет">Журнал заполнится после обработки заявки.</EmptyState>}</section>;
+  return <CollapsiblePanel className="audit-panel" eyebrow="Контроль" title="Журнал аудита" description="Полный журнал доступен для выгрузки." summary={records.length ? `${records.length} событий` : "Пока нет событий"}>
+    <div className="audit-panel__actions"><Button variant="secondary" busy={downloading === "json"} onClick={() => download("json")}>Скачать JSON</Button><Button variant="secondary" busy={downloading === "csv"} onClick={() => download("csv")}>Скачать CSV</Button></div>
+    {records.length ? <ol>{records.slice(-12).reverse().map((record) => <li key={record.id}><i /><div><strong>{auditLabels[record.event_type] || "Событие процесса"}</strong><span>{new Date(record.created_at).toLocaleString("ru-RU")} · {auditSourceLabels[record.source] || "Внутренняя система"}</span>{record.event_type === "COMPLIANCE_REVIEW" && <p>{complianceOutcomeLabels[record.payload?.outcome] || "Результат сохранён"}: {record.payload?.comment || "Без комментария"}</p>}{record.event_type === "PIPELINE_ERROR" && <p>Техническая ошибка направлена на ручную проверку.</p>}</div></li>)}</ol> : <EmptyState icon="≡" title="Событий пока нет">Журнал заполнится после обработки заявки.</EmptyState>}
+  </CollapsiblePanel>;
 }
 
 function AlternativePanel({ application, alternativeSet, busy, onGenerate, onOffer }) {
@@ -309,13 +327,14 @@ function AcceptedAlternativeReview({ application, offer, originalAssessment }) {
 }
 
 function AssessmentSummary({ assessment }) {
-  if (!assessment) return <section className="panel"><h2>Скоринг</h2><p className="muted">Оценка пока не сформирована.</p></section>;
+  if (!assessment) return <CollapsiblePanel eyebrow="Оценка" title="Скоринг и объяснения"><p className="muted">Оценка пока не сформирована.</p></CollapsiblePanel>;
   const result = assessment.result || {}; const features = result.features || {}; const inputData = assessment.input_snapshot?.input_data || result.input_snapshot?.input_data || {}; const checks = assessment.input_snapshot?.checks || result.input_snapshot?.checks || [];
-  return <section className="panel assessment"><div className="assessment__heading"><div><h2>Скоринг и объяснения</h2><p className="muted">Демонстрационная оценка помогает сотруднику и не является итоговым решением.</p></div><span>{assessmentStatuses[result.assessment_status] || "Статус неизвестен"}</span></div><div className="assessment__summary"><div className="assessment__score"><small>Балл</small><strong>{result.score ?? "—"}<span>{result.score === null || result.score === undefined ? "" : " / 100"}</span></strong><small>Риск: {riskLabels[result.risk_level] || "Не определён"}</small></div><div><small>Рекомендация скоринга</small><strong>{recommendationLabels[result.recommendation] || "Не сформирована"}</strong></div></div>
+  return <CollapsiblePanel className="assessment" eyebrow="Оценка" title="Скоринг и объяснения" description="Демонстрационная оценка помогает сотруднику и не является итоговым решением." summary={<><span className="assessment__status">{assessmentStatuses[result.assessment_status] || "Статус неизвестен"}</span><b className="assessment__score-label">Балл: {result.score ?? "—"} · риск {riskLabels[result.risk_level] || "не определён"}</b></>}>
+    <div className="assessment__summary"><div className="assessment__score"><small>Балл</small><strong>{result.score ?? "—"}<span>{result.score === null || result.score === undefined ? "" : " / 100"}</span></strong><small>Риск: {riskLabels[result.risk_level] || "Не определён"}</small></div><div><small>Рекомендация скоринга</small><strong>{recommendationLabels[result.recommendation] || "Не сформирована"}</strong></div></div>
     {result.reasons?.length > 0 && <div className="assessment__section"><h3>Причины рекомендации</h3><ul>{result.reasons.map((reason, index) => <li key={`${reason.code || "reason"}-${index}`}>{recommendationReason(reason)}</li>)}</ul></div>}
     {result.factors?.length > 0 && <div className="assessment__section"><h3>Факторы балла</h3><div className="assessment__factors">{result.factors.map((factor) => <article key={factor.code}><div><strong>{factorLabels[factor.code] || "Дополнительный фактор"}</strong><b>{factor.points} из {factor.max_points}</b></div><p>{factor.explanation || "Фактор учтён при расчёте балла."}</p>{factor.code === "OPERATING_MARGIN" && <AssessmentFormula title="Операционная маржа" formula="(выручка − расходы) / выручка" values={`(${formatMoney(inputData.average_monthly_revenue)} − ${formatMoney(inputData.average_monthly_operating_expenses)}) / ${formatMoney(inputData.average_monthly_revenue)} = ${formatPercent(features.operating_margin)}`} />}{factor.code === "DEBT_BURDEN" && <AssessmentFormula title="Долговая нагрузка" formula="(текущие платежи + новый платёж) / прибыль" values={formatPercent(features.debt_burden)} />}</article>)}</div></div>}
     {checks.length > 0 && <div className="assessment__section"><h3>Входные проверки скоринга</h3><div className="assessment__checks">{checks.map((check) => <div key={check.source}><strong>{checkLabels[check.source] || "Дополнительная проверка"}</strong><span className={`assessment__check assessment__check--${String(check.status).toLowerCase()}`}>{checkStatuses[check.status] || "Статус получен"}</span><small>{checkReasonLabels[check.reason_code] || "Результат проверки получен"}</small></div>)}</div></div>}
     {result.hard_stops?.length > 0 && <div className="assessment__stops"><strong>Обязательные ограничения</strong><ul>{result.hard_stops.map((code) => <li key={code}>{reasonCodeLabels[code] || recommendationReason(result.reasons?.find((reason) => reason.code === code))}</li>)}</ul></div>}
-  </section>;
+  </CollapsiblePanel>;
 }
 function AssessmentFormula({ title, formula, values }) { return <div className="assessment__calculation"><strong>{title}</strong><span>{formula}</span><b>{values}</b></div>; }

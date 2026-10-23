@@ -10,6 +10,7 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@alfalab/core-components-accordion": "^3.0.13",
     "@alfalab/core-components-button": "^13.2.4",
     "@alfalab/core-components-slider-input": "^11.1.10",
     "@alfalab/core-components-toast": "^8.0.15",
