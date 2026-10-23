@@ -176,6 +176,27 @@ a { color: inherit; }
 .alternative-card .app-button { margin-top: auto; }
 .alternative-status { color: #865a00; font-size: 11px; font-weight: 800; }
 .alternative-status--accepted { color: #39721b; }
+.accepted-review { display: flex; flex-direction: column; gap: 18px; border-color: #cfe0c4; background: linear-gradient(115deg, #fff 0%, #fbfff7 100%); }
+.accepted-review__heading h2 { margin: 8px 0 4px; }
+.accepted-review__heading p { margin: 0; color: var(--muted); font-size: 12px; }
+.accepted-review__comparison { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 14px; }
+.accepted-review__side { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 15px; display: flex; flex-direction: column; gap: 7px; background: #fff; }
+.accepted-review__side > small { color: var(--muted); font-size: 10px; font-weight: 750; text-transform: uppercase; letter-spacing: .05em; }
+.accepted-review__side > strong { font-size: clamp(20px, 3vw, 28px); }
+.accepted-review__side > span { font-weight: 750; }
+.accepted-review__side dl { margin: 9px 0 0; display: grid; gap: 8px; }
+.accepted-review__side dl div { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.accepted-review__side dt { color: var(--muted); font-size: 11px; }
+.accepted-review__side dd { margin: 0; font-size: 12px; font-weight: 750; text-align: right; }
+.accepted-review__side--original { color: #666; background: #f7f7f4; }
+.accepted-review__side--original s { text-decoration-color: #a84940; text-decoration-thickness: 1.5px; }
+.accepted-review__side--accepted { border-color: #cfe0c4; background: #f3faed; }
+.accepted-review__side--accepted > strong, .accepted-review__side--accepted dd { color: #315f20; }
+.accepted-review__arrow { color: var(--red); font-size: 28px; font-weight: 800; }
+.accepted-review__underwriting { border-color: #cfe0c4; }
+.accepted-review__underwriting h2 { margin-bottom: 8px; }
+.accepted-review__underwriting p { margin: 0; color: var(--muted); }
+.accepted-review__underwriting p strong { color: #315f20; }
 .client-alternative { margin: 0 0 18px; display: flex; flex-direction: column; gap: 16px; border-color: #e7b9b5; box-shadow: inset 4px 0 0 var(--red); }
 .client-alternative .facts { margin: 0; }
 .client-alternative__actions { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -211,4 +232,6 @@ a { color: inherit; }
   .client-alternative__actions .app-button { flex: 1 1 100%; }
   .approval-terms__flow { grid-template-columns: 1fr; }
   .approval-terms__arrow { justify-self: center; transform: rotate(90deg); }
+  .accepted-review__comparison { grid-template-columns: 1fr; }
+  .accepted-review__arrow { justify-self: center; transform: rotate(90deg); }
 }

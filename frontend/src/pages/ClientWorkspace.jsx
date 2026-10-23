@@ -19,6 +19,12 @@ function formatPercent(value) {
   return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(Number(value) * 100)}%`;
 }
 
+function hasChangedApprovedTerms(application) {
+  if (application?.approved_amount === null || application?.approved_amount === undefined) return false;
+  return Number(application.approved_amount) !== Number(application.requested_amount)
+    || Number(application.approved_term_months) !== Number(application.term_months);
+}
+
 function formatCompactMoney(value) {
   if (value >= 1_000_000) return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(value / 1_000_000)} млн ₽`;
   return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(value / 1_000)} тыс. ₽`;
@@ -287,7 +293,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
     {status === "REJECTED" && <Alert title="Комментарий банка">{infoRequest.loading ? "Загружаем сообщение сотрудника…" : infoRequest.error ? `Не удалось загрузить сообщение: ${infoRequest.error}` : infoRequest.message || "Сотрудник не добавил комментарий к решению."}</Alert>}
     {status === "UNDER_REVIEW" && alternativeError && <Alert type="error">Не удалось загрузить предложение: {alternativeError}</Alert>}
     {status === "UNDER_REVIEW" && alternativeOffer && <ClientAlternativeCard offer={alternativeOffer} busy={alternativeBusy} onDecision={decideAlternative} />}
-    {status === "APPROVED" && application?.approved_amount !== null && application?.approved_amount !== undefined && <ApprovedConditions application={application} />}
+    {status === "APPROVED" && hasChangedApprovedTerms(application) && <ApprovedConditions application={application} />}
     <form className="application-layout" onSubmit={save}>
       <div className="application-main">
         <section className="panel form-section"><div className="form-section__heading"><span>01</span><div><h2>Компания</h2><p>Сведения действующего клиента</p></div></div><div className="company-card"><b>{company.name}</b><span>{company.legal_form} · ИНН {company.inn}</span><small>Работает с {new Date(company.registration_date).toLocaleDateString("ru-RU")}</small></div></section>
@@ -328,8 +334,9 @@ function Dashboard({ company, applications, onNew, onOpen }) {
 }
 
 function ApplicationTerms({ item, compact = false }) {
+  if (item.status === "APPROVED" && !hasChangedApprovedTerms(item)) return null;
   const requested = `${formatMoney(item.requested_amount)} · ${item.term_months || "—"} мес.`;
-  const hasApproval = item.approved_amount !== null && item.approved_amount !== undefined;
+  const hasApproval = hasChangedApprovedTerms(item);
   if (!hasApproval) return <span className="application-terms__plain">Запрошено: {requested}</span>;
 
   const approved = `${formatMoney(item.approved_amount)} · ${item.approved_term_months} мес.`;

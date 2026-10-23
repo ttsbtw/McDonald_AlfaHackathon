@@ -53,7 +53,15 @@ function ApplicationReview({ id, onBack, unavailable }) {
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   }
   function openAction(mode) { setError(""); setComment(""); setActionMode(mode); }
-  return <div className="content content--wide"><button className="back-link" onClick={onBack}>← К очереди</button>{error && <Alert type="error">{error}</Alert>}{!record ? <Skeleton rows={6} /> : <div className="review-layout"><main><div className="page-heading"><div><span className="eyebrow eyebrow--red">Заявка {String(id).slice(0, 8)}</span><h1>{record.company?.name || "Компания"}</h1><p>{record.purpose}</p></div><StatusBadge status={record.status} /></div><section className="panel"><h2>Параметры и финансы</h2><dl className="facts"><div><dt>Сумма</dt><dd>{formatMoneyValue(record.requested_amount)} ₽</dd></div><div><dt>Срок</dt><dd>{record.term_months} мес.</dd></div><div><dt>Выручка</dt><dd>{formatMoneyValue(record.average_monthly_revenue)} ₽/мес.</dd></div><div><dt>Расходы</dt><dd>{formatMoneyValue(record.average_monthly_operating_expenses)} ₽/мес.</dd></div></dl></section><AssessmentSummary assessment={record.assessments?.[0]} /><AlternativePanel application={record} alternativeSet={alternatives} busy={busy} onGenerate={generateAlternatives} onOffer={sendAlternative} /></main><aside className="panel sticky-card"><span className="eyebrow">Решение</span><h3>Следующее действие</h3>{actionMode ? <><Field label={actionMode === "info" ? "Какие сведения нужно предоставить клиенту?" : "Причина отказа — необязательно"} hint={actionMode === "reject" ? "Можно оставить пустым, например, для технического или очевидного отказа." : undefined}><textarea rows="5" maxLength="1000" value={comment} onChange={(e) => setComment(e.target.value)} autoFocus /></Field><Button busy={busy} onClick={() => action(actionMode)}>{actionMode === "info" ? "Отправить запрос" : "Подтвердить отказ"}</Button><Button disabled={busy} variant="ghost" onClick={() => { setActionMode(null); setComment(""); setError(""); }}>Отмена</Button></> : <><Button busy={busy} onClick={() => action("approve")}>Одобрить</Button><Button busy={busy} variant="secondary" onClick={() => openAction("info")}>Запросить сведения</Button><Button busy={busy} variant="ghost" onClick={() => openAction("reject")}>Отказать</Button></>}</aside></div>}</div>;
+  useEffect(() => {
+    if (record?.status !== "UNDER_REVIEW") return undefined;
+    const timer = window.setInterval(async () => {
+      if (document.visibilityState !== "visible") return;
+      try { setAlternatives(await api.bankAlternatives(id)); } catch { /* Keep the last known proposal while the API retries. */ }
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [id, record?.status]);
+  return <div className="content content--wide"><button className="back-link" onClick={onBack}>← К очереди</button>{error && <Alert type="error">{error}</Alert>}{!record ? <Skeleton rows={6} /> : <div className="review-layout"><main><div className="page-heading"><div><span className="eyebrow eyebrow--red">Заявка {String(id).slice(0, 8)}</span><h1>{record.company?.name || "Компания"}</h1><p>{record.purpose}</p></div><StatusBadge status={record.status} /></div><section className="panel"><h2>Параметры и финансы</h2><dl className="facts"><div><dt>Сумма</dt><dd>{formatMoneyValue(record.requested_amount)} ₽</dd></div><div><dt>Срок</dt><dd>{record.term_months} мес.</dd></div><div><dt>Выручка</dt><dd>{formatMoneyValue(record.average_monthly_revenue)} ₽/мес.</dd></div><div><dt>Расходы</dt><dd>{formatMoneyValue(record.average_monthly_operating_expenses)} ₽/мес.</dd></div></dl></section><AssessmentSummary assessment={record.assessments?.[0]} title="Исходный скоринг" /><AlternativePanel application={record} alternativeSet={alternatives} busy={busy} onGenerate={generateAlternatives} onOffer={sendAlternative} /></main><aside className="panel sticky-card"><span className="eyebrow">Решение</span><h3>Следующее действие</h3>{actionMode ? <><Field label={actionMode === "info" ? "Какие сведения нужно предоставить клиенту?" : "Причина отказа — необязательно"} hint={actionMode === "reject" ? "Можно оставить пустым, например, для технического или очевидного отказа." : undefined}><textarea rows="5" maxLength="1000" value={comment} onChange={(e) => setComment(e.target.value)} autoFocus /></Field><Button busy={busy} onClick={() => action(actionMode)}>{actionMode === "info" ? "Отправить запрос" : "Подтвердить отказ"}</Button><Button disabled={busy} variant="ghost" onClick={() => { setActionMode(null); setComment(""); setError(""); }}>Отмена</Button></> : <><Button busy={busy} onClick={() => action("approve")}>Одобрить</Button><Button busy={busy} variant="secondary" onClick={() => openAction("info")}>Запросить сведения</Button><Button busy={busy} variant="ghost" onClick={() => openAction("reject")}>Отказать</Button></>}</aside></div>}</div>;
 }
 
 function AlternativePanel({ application, alternativeSet, busy, onGenerate, onOffer }) {
@@ -76,6 +84,7 @@ function AlternativePanel({ application, alternativeSet, busy, onGenerate, onOff
     {generated && !alternativeSet.alternatives?.length && <p className="muted">{alternativeSet.reason || "Подходящие варианты не найдены."}</p>}
     {alternativeSet?.alternatives?.length > 0 && <div className="alternatives__list">{alternativeSet.alternatives.map((item) => <article className="alternative-card" key={item.id}><div className="alternative-card__top"><strong>{formatMoneyValue(item.amount)} ₽</strong><span>{item.term_months} мес.</span></div><dl><div><dt>Ставка</dt><dd>{formatCalcPercent(Number(item.annual_interest_rate) / 100)}</dd></div><div><dt>Платёж в месяц</dt><dd>{formatMoneyValue(item.monthly_payment)} ₽</dd></div><div><dt>Долговая нагрузка</dt><dd>{formatCalcPercent(item.debt_burden)}</dd></div></dl><p>{item.reason}</p><small>Скоринг: {recommendationLabels[item.evaluation?.scoring?.recommendation] || "—"}; underwriting: {item.evaluation?.underwriting?.status || "—"}.</small>{item.status === "GENERATED" && <Button busy={busy} onClick={() => onOffer(item.id)}>Предложить клиенту</Button>}{item.status === "OFFERED" && <span className="alternative-status">Ожидает ответа</span>}{item.status === "ACCEPTED" && <span className="alternative-status alternative-status--accepted">Клиент принял</span>}{item.status === "DECLINED" && <span className="alternative-status">Клиент отказался</span>}</article>)}</div>}
     {!generated && result.underwriting?.status !== "PASS" && application.status === "UNDER_REVIEW" && <p className="muted">Можно проверить, устраняются ли причины отказа изменением суммы или срока.</p>}
+    {accepted && <AcceptedAlternativeReview application={application} offer={accepted} originalAssessment={application.assessments?.[0]} />}
   </section>;
 }
 
@@ -113,15 +122,36 @@ const checkReasonLabels = {
   UNAVAILABLE: "Данные временно недоступны",
 };
 
-function AssessmentSummary({ assessment }) {
-  if (!assessment) return <section className="panel"><h2>Оценка системы</h2><p className="muted">Оценка пока не сформирована.</p></section>;
+function AcceptedAlternativeReview({ application, offer, originalAssessment }) {
+  const original = originalAssessment?.result || {};
+  const originalFeatures = original.features || {};
+  const rescored = offer.evaluation?.scoring || {};
+  const rescoredAssessment = { result: rescored, input_snapshot: rescored.input_snapshot };
+  const originalPayment = originalFeatures.new_monthly_payment;
+  const originalBurden = originalFeatures.debt_burden;
+  return <>
+    <section className="panel accepted-review">
+      <div className="accepted-review__heading"><span className="eyebrow eyebrow--red">Клиент принял предложение</span><h2>Новые условия для итогового решения</h2><p>Сотрудник увидит исходные условия и вариант, который выбрал клиент.</p></div>
+      <div className="accepted-review__comparison">
+        <div className="accepted-review__side accepted-review__side--original"><small>Исходная заявка</small><strong><s>{formatMoneyValue(application.requested_amount)} ₽</s></strong><span><s>{application.term_months} мес.</s></span><dl><div><dt>Ежемесячный платёж</dt><dd><s>{formatMoneyValue(originalPayment)} ₽</s></dd></div><div><dt>Долговая нагрузка</dt><dd><s>{formatCalcPercent(originalBurden)}</s></dd></div><div><dt>Балл</dt><dd><s>{original.score ?? "—"} / 100</s></dd></div></dl></div>
+        <span className="accepted-review__arrow" aria-hidden="true">→</span>
+        <div className="accepted-review__side accepted-review__side--accepted"><small>Принятый вариант</small><strong>{formatMoneyValue(offer.amount)} ₽</strong><span>{offer.term_months} мес.</span><dl><div><dt>Ежемесячный платёж</dt><dd>{formatMoneyValue(offer.monthly_payment)} ₽</dd></div><div><dt>Долговая нагрузка</dt><dd>{formatCalcPercent(offer.debt_burden)}</dd></div><div><dt>Балл после пересчёта</dt><dd>{rescored.score ?? "—"} / 100</dd></div></dl><small>Ставка {formatCalcPercent(Number(offer.annual_interest_rate) / 100)} годовых</small></div>
+      </div>
+    </section>
+    <AssessmentSummary assessment={rescoredAssessment} title="Скоринг по принятым условиям" />
+    {offer.evaluation?.underwriting && <section className="panel accepted-review__underwriting"><h2>Проверки новых условий</h2><p>Underwriting: <strong>{offer.evaluation.underwriting.status === "PASS" ? "Пройден" : offer.evaluation.underwriting.status}</strong></p></section>}
+  </>;
+}
+
+function AssessmentSummary({ assessment, title = "Оценка системы" }) {
+  if (!assessment) return <section className="panel"><h2>{title}</h2><p className="muted">Оценка пока не сформирована.</p></section>;
   const result = assessment.result || {};
   const features = result.features || {};
   const inputData = assessment.input_snapshot?.input_data || result.input_snapshot?.input_data || {};
   const checks = assessment.input_snapshot?.checks || result.input_snapshot?.checks || [];
   const missingFields = result.missing_fields || [];
   const validationErrors = result.validation_errors || [];
-  return <section className="panel assessment"><div className="assessment__heading"><div><h2>Оценка системы</h2><p className="muted">Демонстрационная оценка по данным заявки. Итоговое решение принимает сотрудник.</p></div><span>{assessmentStatuses[result.assessment_status] || "Статус неизвестен"}</span></div>
+  return <section className="panel assessment"><div className="assessment__heading"><div><h2>{title}</h2><p className="muted">Демонстрационная оценка по данным заявки. Итоговое решение принимает сотрудник.</p></div><span>{assessmentStatuses[result.assessment_status] || "Статус неизвестен"}</span></div>
     <div className="assessment__summary"><div className="assessment__score"><small>Балл</small><strong>{result.score ?? "—"}<span>{result.score === null || result.score === undefined ? "" : " / 100"}</span></strong><small>Риск: {riskLabels[result.risk_level] || "Не определён"}</small></div><div><small>Рекомендация системы</small><strong>{recommendationLabels[result.recommendation] || "Не сформирована"}</strong></div></div>
     {result.reasons?.length > 0 && <div className="assessment__section"><h3>Почему система дала такую рекомендацию</h3><ul>{result.reasons.map((reason, index) => <li key={`${reason.code || "reason"}-${index}`}>{reason.message || reason.code}</li>)}</ul></div>}
     {result.factors?.length > 0 && <div className="assessment__section"><h3>Из чего сложился балл</h3><div className="assessment__factors">{result.factors.map((factor) => <article key={factor.code}><div><strong>{factorLabels[factor.code] || factor.code}</strong><b>{factor.points} из {factor.max_points}</b></div><p>{factor.explanation}</p>{factor.code === "OPERATING_MARGIN" && <AssessmentFormula title="Расчёт операционной маржи" formula="(выручка − операционные расходы) / выручка" values={`(${formatCalcMoney(inputData.average_monthly_revenue)} − ${formatCalcMoney(inputData.average_monthly_operating_expenses)}) / ${formatCalcMoney(inputData.average_monthly_revenue)} = ${formatCalcPercent(features.operating_margin)}`} />}{factor.code === "DEBT_BURDEN" && <AssessmentFormula title="Расчёт долговой нагрузки" formula="(текущие платежи + платёж нового кредита) / прибыль после расходов" values={`(${formatCalcMoney(inputData.existing_monthly_debt_payment)} + ${formatCalcMoney(features.new_monthly_payment)}) / ${formatCalcMoney(features.monthly_operating_profit)} = ${formatCalcPercent(features.debt_burden)}`} note="Платёж нового кредита рассчитан по аннуитетной формуле." />}</article>)}</div><small className="assessment__formula-note">Проценты показаны с округлением до 2 знаков; скоринг использует точные значения.</small></div>}
