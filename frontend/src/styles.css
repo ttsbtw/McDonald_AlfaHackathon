@@ -153,3 +153,31 @@ a { color: inherit; }
 .assessment__calculation > b { overflow-wrap: anywhere; font-size: 11px; font-weight: 750; }
 .assessment__calculation > small, .assessment__formula-note { color: var(--muted); font-size: 10px; line-height: 1.45; }
 .assessment__formula-note { display: block; margin-top: 10px; }
+
+.alternatives { display: flex; flex-direction: column; gap: 18px; }
+.alternatives__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.alternatives__heading h2, .client-alternative h2 { margin-bottom: 8px; }
+.alternatives__heading p, .client-alternative p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.alternatives__list { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.alternative-card { padding: 17px; border: 1px solid var(--line); border-radius: 15px; display: flex; flex-direction: column; gap: 12px; background: #fafaf7; }
+.alternative-card__top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.alternative-card__top strong { font-size: 21px; }
+.alternative-card__top span { color: var(--muted); font-size: 12px; font-weight: 750; }
+.alternative-card dl { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.alternative-card dl div { padding: 10px; border-radius: 10px; background: #fff; }
+.alternative-card dt { color: var(--muted); font-size: 9px; }
+.alternative-card dd { margin: 5px 0 0; font-size: 12px; font-weight: 800; }
+.alternative-card p { margin: 0; font-size: 12px; line-height: 1.45; }
+.alternative-card small { color: var(--muted); font-size: 10px; line-height: 1.4; }
+.alternative-card .app-button { margin-top: auto; }
+.alternative-status { color: #865a00; font-size: 11px; font-weight: 800; }
+.alternative-status--accepted { color: #39721b; }
+.client-alternative { margin: 0 0 18px; display: flex; flex-direction: column; gap: 16px; border-color: #e7b9b5; box-shadow: inset 4px 0 0 var(--red); }
+.client-alternative .facts { margin: 0; }
+.client-alternative__actions { display: flex; flex-wrap: wrap; gap: 10px; }
+
+@media (max-width: 700px) {
+  .alternatives__heading { flex-direction: column; }
+  .alternatives__heading .app-button { width: 100%; }
+  .client-alternative__actions .app-button { flex: 1 1 100%; }
+}

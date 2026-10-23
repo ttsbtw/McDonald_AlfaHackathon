@@ -19,8 +19,21 @@ export default function EmployeeWorkspace({ pathname, navigate }) {
 }
 
 function ApplicationReview({ id, onBack, unavailable }) {
-  const [record, setRecord] = useState(null); const [error, setError] = useState(""); const [comment, setComment] = useState(""); const [actionMode, setActionMode] = useState(null); const [busy, setBusy] = useState(false);
-  useEffect(() => { if (!unavailable) Promise.all([api.bankApplication(id), api.bankAssessments(id)]).then(([application, assessments]) => setRecord({ ...application, assessments })).catch((err) => setError(err.message)); }, [id, unavailable]);
+  const [record, setRecord] = useState(null); const [alternatives, setAlternatives] = useState(null); const [error, setError] = useState(""); const [comment, setComment] = useState(""); const [actionMode, setActionMode] = useState(null); const [busy, setBusy] = useState(false);
+  async function refreshAlternatives() { setAlternatives(await api.bankAlternatives(id)); }
+  useEffect(() => { if (!unavailable) Promise.all([api.bankApplication(id), api.bankAssessments(id), api.bankAlternatives(id)]).then(([application, assessments, alternativeSet]) => { setRecord({ ...application, assessments }); setAlternatives(alternativeSet); }).catch((err) => setError(err.message)); }, [id, unavailable]);
+  async function generateAlternatives() {
+    setBusy(true); setError("");
+    try { setAlternatives(await api.generateAlternatives(id)); }
+    catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  }
+  async function sendAlternative(offerId) {
+    setBusy(true); setError("");
+    try { await api.offerAlternative(id, offerId); await refreshAlternatives(); }
+    catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  }
   async function action(type) {
     const message = comment.trim();
     if (type === "info" && !message) { setError("Напишите, какие сведения нужно предоставить."); return; }
@@ -32,7 +45,22 @@ function ApplicationReview({ id, onBack, unavailable }) {
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   }
   function openAction(mode) { setError(""); setComment(""); setActionMode(mode); }
-  return <div className="content content--wide"><button className="back-link" onClick={onBack}>← К очереди</button>{error && <Alert type="error">{error}</Alert>}{!record ? <Skeleton rows={6} /> : <div className="review-layout"><main><div className="page-heading"><div><span className="eyebrow eyebrow--red">Заявка {String(id).slice(0, 8)}</span><h1>{record.company?.name || "Компания"}</h1><p>{record.purpose}</p></div><StatusBadge status={record.status} /></div><section className="panel"><h2>Параметры и финансы</h2><dl className="facts"><div><dt>Сумма</dt><dd>{formatMoneyValue(record.requested_amount)} ₽</dd></div><div><dt>Срок</dt><dd>{record.term_months} мес.</dd></div><div><dt>Выручка</dt><dd>{formatMoneyValue(record.average_monthly_revenue)} ₽/мес.</dd></div><div><dt>Расходы</dt><dd>{formatMoneyValue(record.average_monthly_operating_expenses)} ₽/мес.</dd></div></dl></section><AssessmentSummary assessment={record.assessments?.[0]} /></main><aside className="panel sticky-card"><span className="eyebrow">Решение</span><h3>Следующее действие</h3>{actionMode ? <><Field label={actionMode === "info" ? "Какие сведения нужны клиенту?" : "Причина отказа — необязательно"} hint={actionMode === "reject" ? "Можно оставить пустым, например, для технического или очевидного отказа." : undefined}><textarea rows="5" maxLength="1000" value={comment} onChange={(e) => setComment(e.target.value)} autoFocus /></Field><Button busy={busy} onClick={() => action(actionMode)}>{actionMode === "info" ? "Отправить запрос" : "Подтвердить отказ"}</Button><Button disabled={busy} variant="ghost" onClick={() => { setActionMode(null); setComment(""); setError(""); }}>Отмена</Button></> : <><Button busy={busy} onClick={() => action("approve")}>Одобрить</Button><Button busy={busy} variant="secondary" onClick={() => openAction("info")}>Запросить сведения</Button><Button busy={busy} variant="ghost" onClick={() => openAction("reject")}>Отказать</Button></>}</aside></div>}</div>;
+  return <div className="content content--wide"><button className="back-link" onClick={onBack}>← К очереди</button>{error && <Alert type="error">{error}</Alert>}{!record ? <Skeleton rows={6} /> : <div className="review-layout"><main><div className="page-heading"><div><span className="eyebrow eyebrow--red">Заявка {String(id).slice(0, 8)}</span><h1>{record.company?.name || "Компания"}</h1><p>{record.purpose}</p></div><StatusBadge status={record.status} /></div><section className="panel"><h2>Параметры и финансы</h2><dl className="facts"><div><dt>Сумма</dt><dd>{formatMoneyValue(record.requested_amount)} ₽</dd></div><div><dt>Срок</dt><dd>{record.term_months} мес.</dd></div><div><dt>Выручка</dt><dd>{formatMoneyValue(record.average_monthly_revenue)} ₽/мес.</dd></div><div><dt>Расходы</dt><dd>{formatMoneyValue(record.average_monthly_operating_expenses)} ₽/мес.</dd></div></dl></section><AssessmentSummary assessment={record.assessments?.[0]} /><AlternativePanel application={record} alternativeSet={alternatives} busy={busy} onGenerate={generateAlternatives} onOffer={sendAlternative} /></main><aside className="panel sticky-card"><span className="eyebrow">Решение</span><h3>Следующее действие</h3>{actionMode ? <><Field label={actionMode === "info" ? "Какие сведения нужно предоставить клиенту?" : "Причина отказа — необязательно"} hint={actionMode === "reject" ? "Можно оставить пустым, например, для технического или очевидного отказа." : undefined}><textarea rows="5" maxLength="1000" value={comment} onChange={(e) => setComment(e.target.value)} autoFocus /></Field><Button busy={busy} onClick={() => action(actionMode)}>{actionMode === "info" ? "Отправить запрос" : "Подтвердить отказ"}</Button><Button disabled={busy} variant="ghost" onClick={() => { setActionMode(null); setComment(""); setError(""); }}>Отмена</Button></> : <><Button busy={busy} onClick={() => action("approve")}>Одобрить</Button><Button busy={busy} variant="secondary" onClick={() => openAction("info")}>Запросить сведения</Button><Button busy={busy} variant="ghost" onClick={() => openAction("reject")}>Отказать</Button></>}</aside></div>}</div>;
+}
+
+function AlternativePanel({ application, alternativeSet, busy, onGenerate, onOffer }) {
+  const result = application.assessments?.[0]?.result || {};
+  const generated = alternativeSet?.status && alternativeSet.status !== "NOT_GENERATED";
+  const accepted = alternativeSet?.alternatives?.find((item) => item.status === "ACCEPTED");
+  const activeOffer = alternativeSet?.active_offer;
+  const canGenerate = application.status === "UNDER_REVIEW" && !accepted && !activeOffer;
+  return <section className="panel alternatives"><div className="alternatives__heading"><div><h2>Альтернативные условия</h2><p>Расчётные варианты не являются одобрением. Итоговое решение принимает сотрудник.</p></div>{canGenerate && <Button busy={busy} variant="secondary" onClick={onGenerate}>{generated ? "Пересчитать варианты" : "Рассчитать варианты"}</Button>}</div>
+    {accepted && <Alert title="Клиент принял условия">Можно принять итоговое решение по сумме {formatMoneyValue(accepted.amount)} ₽ на {accepted.term_months} мес.</Alert>}
+    {activeOffer && <Alert title="Предложение отправлено клиенту">Ожидаем ответ по сумме {formatMoneyValue(activeOffer.amount)} ₽ на {activeOffer.term_months} мес.</Alert>}
+    {generated && !alternativeSet.alternatives?.length && <p className="muted">{alternativeSet.reason || "Подходящие варианты не найдены."}</p>}
+    {alternativeSet?.alternatives?.length > 0 && <div className="alternatives__list">{alternativeSet.alternatives.map((item) => <article className="alternative-card" key={item.id}><div className="alternative-card__top"><strong>{formatMoneyValue(item.amount)} ₽</strong><span>{item.term_months} мес.</span></div><dl><div><dt>Ставка</dt><dd>{formatCalcPercent(Number(item.annual_interest_rate) / 100)}</dd></div><div><dt>Платёж в месяц</dt><dd>{formatMoneyValue(item.monthly_payment)} ₽</dd></div><div><dt>Долговая нагрузка</dt><dd>{formatCalcPercent(item.debt_burden)}</dd></div></dl><p>{item.reason}</p><small>Скоринг: {recommendationLabels[item.evaluation?.scoring?.recommendation] || "—"}; underwriting: {item.evaluation?.underwriting?.status || "—"}.</small>{item.status === "GENERATED" && <Button busy={busy} onClick={() => onOffer(item.id)}>Предложить клиенту</Button>}{item.status === "OFFERED" && <span className="alternative-status">Ожидает ответа</span>}{item.status === "ACCEPTED" && <span className="alternative-status alternative-status--accepted">Клиент принял</span>}{item.status === "DECLINED" && <span className="alternative-status">Клиент отказался</span>}</article>)}</div>}
+    {!generated && result.underwriting?.status !== "PASS" && application.status === "UNDER_REVIEW" && <p className="muted">Можно проверить, устраняются ли причины отказа изменением суммы или срока.</p>}
+  </section>;
 }
 
 const recommendationLabels = {

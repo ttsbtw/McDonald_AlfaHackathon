@@ -14,6 +14,11 @@ function formatMoney(value) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(Number(value)) + " ₽";
 }
 
+function formatPercent(value) {
+  if (value === null || value === undefined || value === "" || !Number.isFinite(Number(value))) return "—";
+  return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(Number(value) * 100)}%`;
+}
+
 function formatCompactMoney(value) {
   if (value >= 1_000_000) return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(value / 1_000_000)} млн ₽`;
   return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(value / 1_000)} тыс. ₽`;
@@ -171,6 +176,9 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
   const [busy, setBusy] = useState(false);
   const [focusedRange, setFocusedRange] = useState("");
   const [infoRequest, setInfoRequest] = useState({ loading: false, error: "", message: "" });
+  const [alternativeOffer, setAlternativeOffer] = useState(null);
+  const [alternativeError, setAlternativeError] = useState("");
+  const [alternativeBusy, setAlternativeBusy] = useState(false);
   const status = saved?.status;
   const readOnly = ["SUBMITTED", "UNDER_REVIEW", "APPROVED", "REJECTED"].includes(status);
   const finalDecision = ["APPROVED", "REJECTED"].includes(status);
@@ -200,6 +208,28 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
       });
     return () => { active = false; };
   }, [saved?.id, status]);
+
+  useEffect(() => {
+    if (!saved?.id || status !== "UNDER_REVIEW") {
+      setAlternativeOffer(null); setAlternativeError("");
+      return;
+    }
+    let active = true;
+    api.applicationAlternativeOffer(saved.id)
+      .then((offer) => { if (active) { setAlternativeOffer(offer); setAlternativeError(""); } })
+      .catch((err) => { if (active) setAlternativeError(err.message); });
+    return () => { active = false; };
+  }, [saved?.id, status]);
+
+  async function decideAlternative(decision) {
+    if (!saved?.id || !alternativeOffer) return;
+    setAlternativeBusy(true); setAlternativeError("");
+    try {
+      const result = await api.decideAlternativeOffer(saved.id, alternativeOffer.id, { decision });
+      setAlternativeOffer(result);
+    } catch (err) { setAlternativeError(err.message); }
+    finally { setAlternativeBusy(false); }
+  }
 
   const set = (field) => (event) => {
     if (readOnly) return;
@@ -254,6 +284,8 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
     {notice && <Alert type={noticeType}>{notice}</Alert>}
     {status === "NEEDS_INFO" && <Alert title="Банк запросил уточнения">{infoRequest.loading ? "Загружаем сообщение сотрудника…" : infoRequest.error ? `Не удалось загрузить сообщение: ${infoRequest.error}` : infoRequest.message || "В истории нет текста запроса. Свяжитесь с сотрудником банка, чтобы уточнить, какие сведения нужно добавить."}</Alert>}
     {status === "REJECTED" && <Alert title="Комментарий банка">{infoRequest.loading ? "Загружаем сообщение сотрудника…" : infoRequest.error ? `Не удалось загрузить сообщение: ${infoRequest.error}` : infoRequest.message || "Сотрудник не добавил комментарий к решению."}</Alert>}
+    {status === "UNDER_REVIEW" && alternativeError && <Alert type="error">Не удалось загрузить предложение: {alternativeError}</Alert>}
+    {status === "UNDER_REVIEW" && alternativeOffer && <ClientAlternativeCard offer={alternativeOffer} busy={alternativeBusy} onDecision={decideAlternative} />}
     <form className="application-layout" onSubmit={save}>
       <div className="application-main">
         <section className="panel form-section"><div className="form-section__heading"><span>01</span><div><h2>Компания</h2><p>Сведения действующего клиента</p></div></div><div className="company-card"><b>{company.name}</b><span>{company.legal_form} · ИНН {company.inn}</span><small>Работает с {new Date(company.registration_date).toLocaleDateString("ru-RU")}</small></div></section>
@@ -263,6 +295,12 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
       <aside className="application-aside"><div className="panel sticky-card">{readOnly ? <><span className="eyebrow">{finalDecision ? "Решение банка" : "Заявка отправлена"}</span><h3>{status === "APPROVED" ? "Кредит одобрен" : status === "REJECTED" ? "Заявка отклонена" : "Заявка на рассмотрении"}</h3><p className="muted">{finalDecision ? "Изменить или отправить эту заявку повторно нельзя." : "Пока заявка рассматривается, редактирование и повторная отправка недоступны."}</p></> : <><span className="eyebrow">Перед отправкой</span><h3>Что произойдёт дальше</h3><ol><li>Проверим полноту анкеты</li><li>Выполним локальные проверки</li><li>Передадим сотруднику банка</li></ol><Button type="submit" variant="secondary" busy={busy}>Сохранить черновик</Button><Button type="button" onClick={submit} busy={busy}>Отправить заявку</Button>{saved?.status === "DRAFT" && <Button type="button" variant="ghost" busy={busy} onClick={deleteDraft}>Удалить черновик</Button>}<small>Отправляя заявку, вы подтверждаете корректность синтетических данных.</small></>}</div></aside>
     </form>
   </div>;
+}
+
+function ClientAlternativeCard({ offer, busy, onDecision }) {
+  const pending = offer.status === "OFFERED";
+  const title = pending ? "Банк предлагает изменить условия" : offer.status === "ACCEPTED" ? "Вы приняли альтернативные условия" : "Вы отказались от альтернативных условий";
+  return <section className="panel client-alternative"><div><span className="eyebrow eyebrow--red">Альтернатива от банка · демо-расчёт</span><h2>{title}</h2><p>{offer.reason}</p></div><dl className="facts"><div><dt>Сумма</dt><dd>{formatMoney(offer.amount)}</dd></div><div><dt>Срок</dt><dd>{offer.term_months} мес.</dd></div><div><dt>Ставка</dt><dd>{formatPercent(Number(offer.annual_interest_rate) / 100)}</dd></div><div><dt>Ежемесячный платёж</dt><dd>{formatMoney(offer.monthly_payment)}</dd></div><div><dt>Долговая нагрузка</dt><dd>{formatPercent(offer.debt_burden)}</dd></div></dl>{pending ? <><p className="muted">Если вы примете вариант, сотрудник банка всё равно должен принять итоговое решение. Исходные параметры заявки не изменятся.</p><div className="client-alternative__actions"><Button busy={busy} onClick={() => onDecision("ACCEPTED")}>Принять условия</Button><Button disabled={busy} variant="secondary" onClick={() => onDecision("DECLINED")}>Отказаться</Button></div></> : <p className="muted">{offer.status === "ACCEPTED" ? "Заявка остаётся на рассмотрении до решения сотрудника банка." : "Банк продолжит рассматривать исходную заявку."}</p>}</section>;
 }
 
 function Dashboard({ company, applications, onNew, onOpen }) {
