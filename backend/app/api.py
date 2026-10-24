@@ -11,6 +11,12 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import StaleDataError
 
+from .ai_analysis import (
+    InvalidModelAnswer,
+    OllamaModelMissing,
+    OllamaUnavailable,
+    analyze_with_ollama,
+)
 from .alternatives import generate_alternatives
 from .auth import DB, BankEmployee, Client, CurrentUser, create_token, dummy_hash, password_hash
 from .errors import APIError
@@ -29,6 +35,7 @@ from .models import (
 )
 from .pipeline.processing import ProcessingPipeline
 from .schemas import (
+    AIAnalysisOut,
     AlternativeCandidateOut,
     AlternativeDecisionIn,
     AlternativeSetOut,
@@ -406,6 +413,42 @@ def bank_assessments(application_id: UUID, db: DB, user: BankEmployee):
         .where(Assessment.application_id == application_id)
         .order_by(Assessment.application_revision.desc())
     ).all()
+
+
+@router.post("/bank/applications/{application_id}/ai-analysis", response_model=AIAnalysisOut,
+             tags=["Рабочее место сотрудника"], responses={503: {"model": ErrorResponse}})
+def bank_ai_analysis(application_id: UUID, request: Request, db: DB, user: BankEmployee):
+    item = db.get(Application, application_id)
+    if item is None or item.status == "DRAFT":
+        raise APIError(404, "APPLICATION_NOT_FOUND", "Заявка не найдена.")
+    assessment = current_assessment(db, item)
+    company = db.get(Company, item.company_id)
+    if company is None:
+        raise APIError(409, "COMPANY_REQUIRED", "Для заявки не найдены сведения о компании.")
+    compliance_review = db.scalar(
+        select(ComplianceReview)
+        .where(ComplianceReview.application_id == item.id, ComplianceReview.assessment_id == assessment.id)
+        .order_by(ComplianceReview.created_at.desc(), ComplianceReview.id.desc())
+        .limit(1)
+    )
+    try:
+        result = analyze_with_ollama(item, company, assessment, request.app.state.settings, compliance_review)
+    except OllamaModelMissing:
+        raise APIError(503, "OLLAMA_MODEL_MISSING",
+                       "Локальная модель Ollama не найдена. Загрузите настроенную модель и повторите анализ.") from None
+    except OllamaUnavailable:
+        raise APIError(503, "OLLAMA_UNAVAILABLE",
+                       "Локальная Ollama недоступна. Запустите её и повторите анализ.") from None
+    except InvalidModelAnswer as exc:
+        raise APIError(503, "AI_ANALYSIS_INVALID_RESPONSE", str(exc)) from None
+    add_audit(db, item, company, user.id, "AI_SCORING_EXPLANATION", "local_ollama", {
+        "analysis_id": str(result.analysis_id), "application_id": str(item.id),
+        "assessment_id": str(assessment.id), "application_revision": assessment.application_revision,
+        "model": result.model, "prompt_version": result.prompt_version,
+        "analyzed_at": result.analyzed_at.isoformat(), "used_safe_fallback": result.used_safe_fallback,
+    })
+    db.commit()
+    return result
 
 
 @router.get("/bank/applications/{application_id}/audit", tags=["Рабочее место сотрудника"])

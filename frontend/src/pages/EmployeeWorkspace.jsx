@@ -138,6 +138,9 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
   const [comment, setComment] = useState("");
   const [actionMode, setActionMode] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [aiAnalysis, setAiAnalysis] = useState(null);
+  const [aiAnalysisError, setAiAnalysisError] = useState("");
+  const [aiAnalysisBusy, setAiAnalysisBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
   const dismissToast = useCallback(() => setToast(null), []);
@@ -198,6 +201,13 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
     finally { setBusy(false); }
   }
   async function sendAlternative(offerId) { setBusy(true); setError(""); try { await api.offerAlternative(id, offerId); await loadRecord(true); setToast({ id: Date.now(), message: "Альтернативные условия отправлены клиенту" }); } catch (err) { setError(err.message); } finally { setBusy(false); } }
+  async function analyzeScoring() {
+    if (aiAnalysisBusy) return;
+    setAiAnalysisBusy(true); setAiAnalysisError(""); setAiAnalysis(null);
+    try { setAiAnalysis(await api.analyzeBankScoring(id)); }
+    catch (err) { setAiAnalysisError(err.message || "Не удалось выполнить анализ. Повторите попытку."); }
+    finally { setAiAnalysisBusy(false); }
+  }
   async function action(type) {
     const message = comment.trim();
     if (type === "info" && !message) { setError("Напишите, какие сведения нужно предоставить."); return; }
@@ -232,6 +242,7 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
     />
     <ChecksPanel assessment={assessment} />
     <AssessmentSummary assessment={assessment} />
+    <AIAnalysisPanel result={aiAnalysis} loading={aiAnalysisBusy} error={aiAnalysisError} onAnalyze={analyzeScoring} hasAssessment={Boolean(assessment)} />
     {requiresComplianceReview(assessment) && <ComplianceReviewPanel application={record} review={complianceReview} busy={busy} onSaved={() => loadRecord(true)} setBusy={setBusy} setError={setError} />}
     <AlternativePanel application={record} alternativeSet={alternatives} busy={busy} onGenerate={generateAlternatives} onOffer={sendAlternative} />
     <AuditPanel id={id} audit={audit} onError={setError} />
@@ -337,6 +348,41 @@ function AcceptedAlternativeReview({ application, offer, originalAssessment }) {
   const original = originalAssessment?.result || {}; const rescored = offer.evaluation?.scoring || {};
   const isFinal = ["APPROVED", "REJECTED"].includes(application.status);
   return <section className="accepted-review"><div className="accepted-review__heading"><span className="eyebrow eyebrow--red">Клиент принял предложение</span><h2>{isFinal ? "Условия, рассмотренные банком" : "Новые условия для итогового решения"}</h2></div><div className="accepted-review__comparison"><div className="accepted-review__side accepted-review__side--original"><small>Исходная заявка</small><strong><s>{formatMoneyRub(application.requested_amount)}</s></strong><span><s>{application.term_months} мес.</s></span><dl><div><dt>Платёж</dt><dd><s>{formatMoneyRub(original.features?.new_monthly_payment)}</s></dd></div><div><dt>Балл</dt><dd><s>{original.score ?? "—"} / 100</s></dd></div></dl></div><span className="accepted-review__arrow">→</span><div className="accepted-review__side accepted-review__side--accepted"><small>Принятый вариант</small><strong>{formatMoneyRub(offer.amount)}</strong><span>{offer.term_months} мес.</span><dl><div><dt>Платёж</dt><dd>{formatMoneyRub(offer.monthly_payment)}</dd></div><div><dt>Балл</dt><dd>{rescored.score ?? "—"} / 100</dd></div></dl></div></div></section>;
+}
+
+const aiActionLabels = {
+  REVIEW_REQUIRED: "Обязательная проверка",
+  VERIFY_DATA: "Проверить данные",
+  REQUEST_INFORMATION: "Запросить сведения",
+  CONTINUE_REVIEW: "Продолжить рассмотрение",
+};
+
+function AIAnalysisPanel({ result, loading, error, onAnalyze, hasAssessment }) {
+  const evidenceById = Object.fromEntries((result?.evidence || []).map((fact) => [fact.id, fact]));
+  return <section className="panel ai-analysis">
+    <div className="panel-title"><div><span className="eyebrow eyebrow--red">Локальная Ollama</span><h2>Пояснение скоринга с помощью ИИ</h2><p>Анализ опирается на текущую оценку и не меняет баллы, проверки, статус или решение сотрудника.</p></div></div>
+    <Button variant="secondary" busy={loading} disabled={!hasAssessment} onClick={onAnalyze}>
+      {loading ? "Анализируем заявку…" : "Проанализировать скоринг с помощью ИИ"}
+    </Button>
+    {error && <><Alert type="error" title="Не удалось выполнить анализ">{error}</Alert><Button variant="ghost" disabled={loading} onClick={onAnalyze}>Повторить анализ</Button></>}
+    {loading && <p role="status" className="muted">Ожидаем ответ локальной модели. Повторный запуск заблокирован до завершения запроса.</p>}
+    {result && <div className="ai-analysis__result">
+      <p className="ai-analysis__meta">Модель {result.model} · анализ {new Date(result.analyzed_at).toLocaleString("ru-RU")}</p>
+      {result.is_blocked && <Alert type="error" title="Выдача заблокирована обязательной проверкой">{result.blocking_reasons.join(" · ")} ИИ не может отменить это ограничение.</Alert>}
+      {result.used_safe_fallback && <Alert type="info" title="Показан проверенный пересказ">Текст модели содержал неподтверждённые формулировки. Здесь отображены только выводы, собранные backend из исходных фактов заявки.</Alert>}
+      <div className="ai-analysis__section"><h3>Краткое резюме</h3><p>{result.summary}</p><FactReferences ids={result.summary_fact_ids} evidence={evidenceById} /></div>
+      <div className="ai-analysis__section"><h3>Дальнейшее рассмотрение</h3>{result.recommendations.map((item, index) => <article key={`${item.action}-${index}`}><strong>{aiActionLabels[item.action] || "Рекомендация"}</strong><p>{item.text}</p><FactReferences ids={item.fact_ids} evidence={evidenceById} /></article>)}</div>
+      <div className="ai-analysis__section"><h3>Недостающие или противоречивые данные</h3>{result.data_warnings.length ? result.data_warnings.map((item, index) => <article key={index}><p>{item.text}</p><FactReferences ids={item.fact_ids} evidence={evidenceById} /></article>) : <p>Явных пропусков или противоречий в переданных фактах не указано.</p>}</div>
+      <small>Промпт {result.prompt_version} · идентификатор анализа {result.analysis_id}</small>
+    </div>}
+    {!hasAssessment && <p className="muted">Для анализа нужна сохранённая оценка заявки.</p>}
+  </section>;
+}
+
+function FactReferences({ ids, evidence }) {
+  const facts = ids.map((id) => evidence[id]).filter(Boolean);
+  if (!facts.length) return null;
+  return <ul className="ai-analysis__facts">{facts.map((fact) => <li key={fact.id}><b>{fact.label}:</b> {fact.value}</li>)}</ul>;
 }
 
 function AssessmentSummary({ assessment }) {

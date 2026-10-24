@@ -167,6 +167,44 @@ class AssessmentOut(APIModel):
         return value.astimezone(timezone.utc)
 
 
+class AIRecommendationOut(APIModel):
+    action: Literal["REVIEW_REQUIRED", "VERIFY_DATA", "REQUEST_INFORMATION", "CONTINUE_REVIEW"]
+    text: str = Field(min_length=1, max_length=500)
+    fact_ids: list[str] = Field(min_length=1, max_length=6)
+
+
+class AIDataWarningOut(APIModel):
+    text: str = Field(min_length=1, max_length=400)
+    fact_ids: list[str] = Field(max_length=6)
+
+
+class AIEvidenceOut(APIModel):
+    id: str
+    label: str
+    value: str
+
+
+class AIAnalysisOut(APIModel):
+    analysis_id: UUID
+    application_id: UUID
+    analyzed_at: datetime
+    model: str
+    prompt_version: str
+    summary: str = Field(min_length=1, max_length=800)
+    summary_fact_ids: list[str] = Field(min_length=1, max_length=8)
+    evidence: list[AIEvidenceOut]
+    recommendations: list[AIRecommendationOut]
+    data_warnings: list[AIDataWarningOut]
+    blocking_reasons: list[str]
+    is_blocked: bool
+    used_safe_fallback: bool
+
+    @field_validator("analyzed_at")
+    @classmethod
+    def normalize_analyzed_at(cls, value):
+        return value.astimezone(timezone.utc)
+
+
 class RequestInfoIn(APIModel):
     comment: str = Field(min_length=1, max_length=1000)
 

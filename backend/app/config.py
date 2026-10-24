@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     demo_client_password: SecretStr | None = None
     demo_second_client_password: SecretStr | None = None
     demo_employee_password: SecretStr | None = None
+    ollama_base_url: str = Field(default="http://host.docker.internal:11434", max_length=300)
+    ollama_model: str = Field(default="qwen3:4b-instruct-2507-q4_K_M", min_length=1, max_length=100)
+    ollama_timeout_seconds: int = Field(default=120, ge=1, le=300)
 
     @field_validator("database_url")
     @classmethod
