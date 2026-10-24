@@ -56,6 +56,19 @@ function formatTerm(value) {
   return months ? `${years} ${yearsLabel} ${months} мес.` : `${years} ${yearsLabel}`;
 }
 
+function ApplicationSteps({ active }) {
+  const steps = ["Подбор", "Заявка", "Рассмотрение"];
+  return <ol className="application-steps" aria-label="Этапы подачи заявки">
+    {steps.map((label, index) => {
+      const number = index + 1;
+      const state = number < active ? "is-complete" : number === active ? "is-active" : "";
+      return <li className={state} aria-current={number === active ? "step" : undefined} key={label}>
+        <span>{number < active ? "✓" : number}</span><b>{label}</b>
+      </li>;
+    })}
+  </ol>;
+}
+
 function getCreditHints(form, product) {
   const number = (value) => {
     if (value === "" || value === null || value === undefined) return null;
@@ -132,7 +145,7 @@ function NeedStep({ products, initial, onChange, onBack, onContinue }) {
   }
   return <div className="content content--wide">
     <button className="back-link" onClick={onBack}>← К заявкам</button>
-    <div className="page-heading"><div><span className="eyebrow eyebrow--red">Шаг 1 из 2</span><h1>Что нужно вашему бизнесу?</h1><p>Ответьте на три вопроса — покажем продукты, которые подходят по открытым условиям.</p></div><span className="big-number">01</span></div>
+    <ApplicationSteps active={1} /><div className="page-heading"><div><span className="eyebrow eyebrow--red">Этап 1 из 3 · Подбор</span><h1>Что нужно вашему бизнесу?</h1><p>Ответьте на три вопроса — покажем продукты, которые подходят по открытым условиям.</p></div><span className="big-number">01</span></div>
     <form className="need-grid" onSubmit={search}>
       <section className="panel panel--form">
         <h2>Цель финансирования</h2>
@@ -211,13 +224,14 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
   const readOnly = ["SUBMITTED", "UNDER_REVIEW", "APPROVED", "REJECTED"].includes(status);
   const finalDecision = ["APPROVED", "REJECTED"].includes(status);
   const approvedDecision = status === "APPROVED";
+  const flowStep = finalDecision || status === "UNDER_REVIEW" || status === "SUBMITTED" ? 3 : 2;
   const heading = finalDecision
-    ? { eyebrow: "Этап 3 из 3", title: "Решение по заявке", number: "03" }
+    ? { eyebrow: "Этап 3 из 3 · Решение", title: "Решение по заявке", number: "03" }
     : status === "UNDER_REVIEW" || status === "SUBMITTED"
-      ? { eyebrow: "Этап 3 из 3", title: "Заявка на рассмотрении", number: "03" }
+      ? { eyebrow: "Этап 3 из 3 · Рассмотрение", title: "Заявка на рассмотрении", number: "03" }
       : status === "NEEDS_INFO"
-        ? { eyebrow: "Требуется уточнение", title: "Дополните заявку", number: "02" }
-        : { eyebrow: "Шаг 2 из 2", title: saved ? "Заявка" : "Расскажите о бизнесе", number: "02" };
+        ? { eyebrow: "Этап 2 из 3 · Требуется уточнение", title: "Дополните заявку", number: "02" }
+        : { eyebrow: "Этап 2 из 3 · Заявка", title: saved ? "Заявка" : "Расскажите о бизнесе", number: "02" };
   const creditHints = useMemo(() => getCreditHints(form, product), [form, product]);
   const amountMin = Number(product?.min_amount ?? 300_000);
   const amountMax = Number(product?.max_amount ?? 10_000_000);
@@ -328,12 +342,12 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
     setForm(next); onFormChange(next); setFocusedRange("");
   }
   async function save(event) {
-    event?.preventDefault(); if (readOnly) return;
+    event?.preventDefault(); if (readOnly || busy) return;
     setBusy(true); setNotice(""); setErrors({});
     try {
       const payload = draftPayload(form);
       const result = saved ? await api.updateApplication(saved.id, { revision: saved.revision, ...payload }) : await api.createApplication(payload);
-      setSaved(result); setForm(withFinancialDefaults(result)); setNotice("Черновик сохранён"); setNoticeType("success"); onSaved(result);
+      setSaved(result); setForm(withFinancialDefaults(result)); onToast("Черновик сохранён"); onSaved(result);
     } catch (err) {
       if (err instanceof ApiError && err.fields.length) setErrors(Object.fromEntries(err.fields.map((item) => [item.field.split(".").pop(), item.message])));
       setNotice(err.message); setNoticeType("error");
@@ -367,7 +381,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
     } finally { setBusy(false); }
   }
 
-  return <div className="content content--form"><button className="back-link" onClick={onClose}>← К заявкам</button><div className="page-heading"><div><span className="eyebrow eyebrow--red">{heading.eyebrow}</span><h1>{heading.title}</h1>{saved && <><StatusBadge status={status} />{alternativeOffer?.status === "OFFERED" && <span className="status status--offer">Нужно ваше решение</span>}</>}<p>{readOnly ? (status === "APPROVED" ? "Заявка одобрена. Ниже сохранены итог и данные отправленной анкеты." : status === "REJECTED" ? "По заявке принято решение об отказе. Ниже сохранены данные отправленной анкеты." : "Заявка отправлена и ожидает решения. Изменения пока недоступны.") : "Известные банку сведения уже заполнены. Добавьте только показатели для оценки."}</p></div><span className="big-number">{heading.number}</span></div>
+  return <div className="content content--form"><button className="back-link" onClick={onClose}>← К заявкам</button><ApplicationSteps active={flowStep} /><div className="page-heading"><div><span className="eyebrow eyebrow--red">{heading.eyebrow}</span><h1>{heading.title}</h1>{saved && <><StatusBadge status={status} />{alternativeOffer?.status === "OFFERED" && <span className="status status--offer">Нужно ваше решение</span>}</>}<p>{readOnly ? (status === "APPROVED" ? "Заявка одобрена. Ниже сохранены итог и данные отправленной анкеты." : status === "REJECTED" ? "По заявке принято решение об отказе. Ниже сохранены данные отправленной анкеты." : "Заявка отправлена и ожидает решения. Изменения пока недоступны.") : "Известные банку сведения уже заполнены. Добавьте только показатели для оценки."}</p></div><span className="big-number">{heading.number}</span></div>
     {notice && <Alert type={noticeType}>{notice}</Alert>}
     {status === "NEEDS_INFO" && <Alert title="Банк запросил уточнения">{infoRequest.loading ? "Загружаем сообщение сотрудника…" : infoRequest.error ? `Не удалось загрузить сообщение: ${infoRequest.error}` : infoRequest.message || "В истории нет текста запроса. Свяжитесь с сотрудником банка, чтобы уточнить, какие сведения нужно добавить."}</Alert>}
     {status === "REJECTED" && <Alert title="Комментарий банка">{infoRequest.loading ? "Загружаем сообщение сотрудника…" : infoRequest.error ? `Не удалось загрузить сообщение: ${infoRequest.error}` : infoRequest.message || "Сотрудник не добавил комментарий к решению."}</Alert>}
@@ -400,7 +414,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
           </>}
         </section>
       </div>
-      <aside className="application-aside"><div className="panel sticky-card">{readOnly ? <><span className="eyebrow">{finalDecision ? "Решение банка" : "Заявка отправлена"}</span><h3>{status === "APPROVED" ? "Кредит одобрен" : status === "REJECTED" ? "Заявка отклонена" : "Заявка на рассмотрении"}</h3><p className="muted">{finalDecision ? "Изменить или отправить эту заявку повторно нельзя." : "Пока заявка рассматривается, редактирование и повторная отправка недоступны."}</p></> : <><span className="eyebrow">Перед отправкой</span><h3>Что произойдёт дальше</h3><ol><li>Проверим полноту анкеты</li><li>Выполним локальные проверки</li><li>Передадим сотруднику банка</li></ol><label className="consent-field"><input type="checkbox" checked={creditHistoryConsent} onChange={(event) => setCreditHistoryConsent(event.target.checked)} /><span>Согласен на запрос синтетической кредитной истории для проверки заявки.</span></label><Accordion className="consent-info" containerClassName="consent-info__trigger" headerClassName="consent-info__header" bodyContentClassName="consent-info__content" header="Зачем нужно согласие?">С согласия будет запрошена демо-кредитная история, а её результат попадёт в проверки заявки. Без согласия проверка будет отмечена как недоступная и может ограничить решение и подбор альтернативных условий.</Accordion><Button type="submit" variant="secondary" busy={busy}>Сохранить черновик</Button><Button type="button" onClick={submit} busy={busy}>Отправить заявку</Button>{saved?.status === "DRAFT" && <Button type="button" variant="ghost" busy={busy} onClick={deleteDraft}>Удалить черновик</Button>}</>}</div></aside>
+      <aside className="application-aside"><div className="panel sticky-card">{readOnly ? <><span className="eyebrow">{finalDecision ? "Решение банка" : "Заявка отправлена"}</span><h3>{status === "APPROVED" ? "Кредит одобрен" : status === "REJECTED" ? "Заявка отклонена" : "Заявка на рассмотрении"}</h3><p className="muted">{finalDecision ? "Изменить или отправить эту заявку повторно нельзя." : "Пока заявка рассматривается, редактирование и повторная отправка недоступны."}</p></> : <><span className="eyebrow">Перед отправкой</span><h3>Что произойдёт дальше</h3><ol><li>Проверим полноту анкеты</li><li>Выполним локальные проверки</li><li>Передадим сотруднику банка</li></ol><label className="consent-field"><input type="checkbox" checked={creditHistoryConsent} onChange={(event) => setCreditHistoryConsent(event.target.checked)} /><span>Согласен на запрос синтетической кредитной истории для проверки заявки.</span></label><Accordion className="consent-info" containerClassName="consent-info__trigger" headerClassName="consent-info__header" bodyContentClassName="consent-info__content" header="Зачем нужно согласие?">С согласия будет запрошена демо-кредитная история, а её результат попадёт в проверки заявки. Без согласия проверка будет отмечена как недоступная и может ограничить решение и подбор альтернативных условий.</Accordion><Button type="button" variant="secondary" onClick={save} busy={busy}>Сохранить черновик</Button><Button type="button" onClick={submit} busy={busy}>Отправить заявку</Button>{saved?.status === "DRAFT" && <Button type="button" variant="ghost" busy={busy} onClick={deleteDraft}>Удалить черновик</Button>}</>}</div></aside>
     </form>
   </div>;
 }

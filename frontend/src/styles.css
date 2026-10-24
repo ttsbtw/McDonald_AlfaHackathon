@@ -91,6 +91,19 @@ a { color: inherit; }
 .back-link { margin-bottom: 28px; padding: 0; border: 0; color: var(--muted); background: none; font-weight: 700; }
 .page-heading { min-height: 150px; margin-bottom: 32px; display: flex; justify-content: space-between; gap: 30px; }
 .page-heading h1 { margin-bottom: 12px; }.page-heading p { max-width: 650px; color: var(--muted); line-height: 1.55; }
+.application-steps { max-width: 760px; margin: 0 0 30px; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); list-style: none; }
+.application-steps li { position: relative; display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+.application-steps li:not(:last-child)::after { content: ""; position: absolute; top: 50%; left: 34px; right: 12px; height: 1px; background: var(--line); transform: translateX(12px); }
+.application-steps li > span { z-index: 1; width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 50%; display: grid; place-items: center; background: #f3f3f1; font-size: 11px; font-weight: 800; }
+.application-steps li b { z-index: 1; padding-right: 12px; background: #f3f3f1; }
+.application-steps li.is-active { color: var(--ink); }
+.application-steps li.is-active > span, .application-steps li.is-complete > span { color: #fff; border-color: var(--red); background: var(--red); }
+.application-steps li.is-active b { font-weight: 800; }
+.app-toast { animation: app-toast-enter .28s cubic-bezier(.2,.75,.25,1) both; }
+@keyframes app-toast-enter { from { opacity: 0; transform: translate3d(0, 20px, 0); } to { opacity: 1; transform: translate3d(0, 0, 0); } }
+.app-toast--center { animation-name: app-toast-enter-center; }
+@keyframes app-toast-enter-center { from { opacity: 0; transform: translate3d(-50%, 20px, 0); } to { opacity: 1; transform: translate3d(-50%, 0, 0); } }
+@media (prefers-reduced-motion: reduce) { .app-toast { animation-duration: .01ms; } }
 .big-number { align-self: flex-start; color: #e4e4df; font-size: 104px; font-weight: 800; letter-spacing: -.09em; line-height: .8; }
 .panel { padding: 28px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
 

@@ -197,13 +197,20 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
     catch (err) { if (err.code === "ASSESSMENT_CONTEXT_UNAVAILABLE") setAlternatives({ status: "BLOCKED", reason: "В оценке нет данных для безопасного подбора. Клиенту нужно повторно отправить актуальную заявку.", alternatives: [] }); else setError(err.message); }
     finally { setBusy(false); }
   }
-  async function sendAlternative(offerId) { setBusy(true); setError(""); try { await api.offerAlternative(id, offerId); await loadRecord(true); } catch (err) { setError(err.message); } finally { setBusy(false); } }
+  async function sendAlternative(offerId) { setBusy(true); setError(""); try { await api.offerAlternative(id, offerId); await loadRecord(true); setToast({ id: Date.now(), message: "Альтернативные условия отправлены клиенту" }); } catch (err) { setError(err.message); } finally { setBusy(false); } }
   async function action(type) {
     const message = comment.trim();
     if (type === "info" && !message) { setError("Напишите, какие сведения нужно предоставить."); return; }
     if (type === "approve" && approvalReason) { setError(approvalReason); return; }
     setBusy(true); setError("");
-    try { if (type === "info") await api.requestInfo(id, { comment: message }); else { await api.decide(id, { decision: type === "approve" ? "APPROVED" : "REJECTED", ...(message ? { comment: message } : {}) }); if (type === "approve") setToast({ id: Date.now(), message: "Заявка одобрена" }); } setActionMode(null); setComment(""); await loadRecord(true); }
+    try {
+      if (type === "info") await api.requestInfo(id, { comment: message });
+      else {
+        await api.decide(id, { decision: type === "approve" ? "APPROVED" : "REJECTED", ...(message ? { comment: message } : {}) });
+        setToast({ id: Date.now(), message: type === "approve" ? "Заявка одобрена" : "Заявка отклонена" });
+      }
+      setActionMode(null); setComment(""); await loadRecord(true);
+    }
     catch (err) { setError(err.message); } finally { setBusy(false); }
   }
   if (loading && !record) return <div className="content content--wide"><button className="back-link" onClick={onBack}>← К очереди</button><Skeleton rows={7} /></div>;
@@ -294,6 +301,9 @@ function AuditPanel({ id, audit, onError }) {
 function AlternativePanel({ application, alternativeSet, busy, onGenerate, onOffer }) {
   const result = application.assessments?.[0]?.result || {};
   const debtBurdenExceeded = (result.hard_stops || []).includes("EXCESSIVE_DEBT_BURDEN") || (result.underwriting?.rules || []).some((rule) => rule.code === "DEBT_BURDEN" && rule.outcome === "REJECT");
+  const alternativeNotNeeded = !(result.hard_stops || []).length
+    && result.underwriting?.status === "PASS"
+    && result.recommendation !== "DECLINE";
   const bki = result.check_reports?.bki;
   const overdueStop = Number(bki?.current_overdue_amount || 0) > 0;
   const generated = alternativeSet?.status && alternativeSet.status !== "NOT_GENERATED";
@@ -301,21 +311,24 @@ function AlternativePanel({ application, alternativeSet, busy, onGenerate, onOff
   const activeOffer = alternativeSet?.active_offer;
   const reviewOpen = application.status === "UNDER_REVIEW";
   const isFinal = ["APPROVED", "REJECTED"].includes(application.status);
-  const canGenerate = reviewOpen && !accepted && !activeOffer;
+  const canGenerate = reviewOpen && !alternativeNotNeeded && !accepted && !activeOffer;
   const helperText = reviewOpen
-    ? debtBurdenExceeded
-      ? "Система может снизить долговую нагрузку меньшей суммой или более долгим сроком."
-      : "Система проверит варианты с меньшей ежемесячной нагрузкой."
+    ? alternativeNotNeeded
+      ? "Исходные условия уже проходят проверки, поэтому менять сумму или срок не требуется."
+      : debtBurdenExceeded
+        ? "Система может снизить долговую нагрузку меньшей суммой или более долгим сроком."
+        : "Система проверит варианты с меньшей ежемесячной нагрузкой."
     : isFinal
       ? "Подбор завершён вместе с рассмотрением заявки. Ниже сохранены рассчитанные варианты."
       : "Подбор приостановлен до получения сведений от клиента.";
   return <section className="panel alternatives">
     <div className="alternatives__heading"><div><h2>Альтернативные условия</h2><p>Клиент запросил {formatMoneyRub(application.requested_amount)} на {application.term_months} мес.</p><p>{helperText}</p><small>Расчётные варианты не являются одобрением.</small></div>{canGenerate && <Button busy={busy} variant="secondary" onClick={onGenerate}>{generated ? "Пересчитать варианты" : "Рассчитать варианты"}</Button>}</div>
+    {reviewOpen && alternativeNotNeeded && <Alert type="success" title="Альтернативные условия не требуются">Исходная заявка проходит скоринг и обязательные проверки. Рассчитывать дополнительные варианты не нужно.</Alert>}
     {overdueStop && <Alert title={reviewOpen ? "Просрочка в БКИ не устраняется условиями" : "На момент проверки была просрочка в БКИ"}>{reviewOpen ? "Сначала требуется проверить просрочку." : "Фактор сохранён в результатах проверки заявки."}</Alert>}
     {accepted && <Alert type={application.status === "APPROVED" ? "success" : "info"} title={reviewOpen ? "Клиент принял условия" : "Ответ клиента сохранён"}>{reviewOpen ? `Можно принять решение по сумме ${formatMoneyRub(accepted.amount)} на ${accepted.term_months} мес.` : isFinal ? `Клиент принял вариант на ${formatMoneyRub(accepted.amount)} и ${accepted.term_months} мес. Итог заявки: ${application.status === "APPROVED" ? "одобрена" : "отказ"}.` : `Клиент принял вариант на ${formatMoneyRub(accepted.amount)} и ${accepted.term_months} мес. Рассмотрение продолжится после уточнения данных.`}</Alert>}
     {reviewOpen && activeOffer && <Alert title="Предложение отправлено клиенту">Ожидаем ответ по сумме {formatMoneyRub(activeOffer.amount)}.</Alert>}
-    {generated && !alternativeSet.alternatives?.length && <p className="muted">{alternativeSet.reason || "Подходящие варианты не найдены."}</p>}
-    {alternativeSet?.alternatives?.length > 0 && <div className="alternatives__list">{alternativeSet.alternatives.map((item) => <article className="alternative-card" key={item.id}><div className="alternative-card__top"><strong>{formatMoneyRub(item.amount)}</strong><span>{item.term_months} мес.</span></div><dl><div><dt>Ставка</dt><dd>{formatPercent(Number(item.annual_interest_rate) / 100)}</dd></div><div><dt>Платёж</dt><dd>{formatMoneyRub(item.monthly_payment)}</dd></div><div><dt>Нагрузка</dt><dd>{formatPercent(item.debt_burden)}</dd></div></dl><p>{item.reason}</p><small>Скоринг: {recommendationLabels[item.evaluation?.scoring?.recommendation] || "—"}; правила: {underwritingLabels[item.evaluation?.underwriting?.status] || "—"}.</small>{item.status === "GENERATED" && reviewOpen && <Button busy={busy} onClick={() => onOffer(item.id)}>Предложить клиенту</Button>}{item.status !== "GENERATED" && <span className={`alternative-status ${item.status === "ACCEPTED" ? "alternative-status--accepted" : ""}`}>{isFinal && item.status === "OFFERED" ? alternativeStatusLabels.SUPERSEDED : alternativeStatusLabels[item.status] || "Статус обновлён"}</span>}</article>)}</div>}
+    {generated && !alternativeSet.alternatives?.length && !alternativeNotNeeded && <p className="muted">{alternativeSet.reason || "Подходящие варианты не найдены."}</p>}
+    {!alternativeNotNeeded && alternativeSet?.alternatives?.length > 0 && <div className="alternatives__list">{alternativeSet.alternatives.map((item) => <article className="alternative-card" key={item.id}><div className="alternative-card__top"><strong>{formatMoneyRub(item.amount)}</strong><span>{item.term_months} мес.</span></div><dl><div><dt>Ставка</dt><dd>{formatPercent(Number(item.annual_interest_rate) / 100)}</dd></div><div><dt>Платёж</dt><dd>{formatMoneyRub(item.monthly_payment)}</dd></div><div><dt>Нагрузка</dt><dd>{formatPercent(item.debt_burden)}</dd></div></dl><p>{item.reason}</p><small>Скоринг: {recommendationLabels[item.evaluation?.scoring?.recommendation] || "—"}; правила: {underwritingLabels[item.evaluation?.underwriting?.status] || "—"}.</small>{item.status === "GENERATED" && reviewOpen && <Button busy={busy} onClick={() => onOffer(item.id)}>Предложить клиенту</Button>}{item.status !== "GENERATED" && <span className={`alternative-status ${item.status === "ACCEPTED" ? "alternative-status--accepted" : ""}`}>{isFinal && item.status === "OFFERED" ? alternativeStatusLabels.SUPERSEDED : alternativeStatusLabels[item.status] || "Статус обновлён"}</span>}</article>)}</div>}
     {accepted && <AcceptedAlternativeReview application={application} offer={accepted} originalAssessment={application.assessments?.[0]} />}
   </section>;
 }
