@@ -51,6 +51,7 @@ export function Toast({ message, onClose, type = "success" }) {
     info: "neutral-information",
   };
   return <CoreToast
+    className="app-toast"
     open={open}
     title={message}
     badge={badgeByType[type] || badgeByType.info}
