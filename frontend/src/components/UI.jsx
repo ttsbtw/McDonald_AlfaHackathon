@@ -22,7 +22,7 @@ export function Alert({ type = "info", children, title }) {
   </div>;
 }
 
-export function Toast({ message, onClose, type = "success" }) {
+export function Toast({ message, onClose, type = "success", position = "right" }) {
   const [open, setOpen] = useState(Boolean(message));
   const closing = useRef(false);
   const exitTimer = useRef(null);
@@ -51,7 +51,7 @@ export function Toast({ message, onClose, type = "success" }) {
     info: "neutral-information",
   };
   return <CoreToast
-    className="app-toast"
+    className={`app-toast ${position === "center" ? "app-toast--center" : ""}`.trim()}
     open={open}
     title={message}
     badge={badgeByType[type] || badgeByType.info}
@@ -59,7 +59,9 @@ export function Toast({ message, onClose, type = "success" }) {
     bottomOffset={24}
     closeWithClickOutside={false}
     closerProps={{ hasCloser: true }}
-    style={{ right: 24, width: "min(420px, calc(100vw - 32px))" }}
+    style={position === "center"
+      ? { left: "50%", right: "auto", width: "min(420px, calc(100vw - 32px))" }
+      : { right: 24, width: "min(420px, calc(100vw - 32px))" }}
     onClose={close}
   />;
 }

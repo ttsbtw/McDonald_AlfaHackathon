@@ -197,13 +197,20 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
     catch (err) { if (err.code === "ASSESSMENT_CONTEXT_UNAVAILABLE") setAlternatives({ status: "BLOCKED", reason: "В оценке нет данных для безопасного подбора. Клиенту нужно повторно отправить актуальную заявку.", alternatives: [] }); else setError(err.message); }
     finally { setBusy(false); }
   }
-  async function sendAlternative(offerId) { setBusy(true); setError(""); try { await api.offerAlternative(id, offerId); await loadRecord(true); } catch (err) { setError(err.message); } finally { setBusy(false); } }
+  async function sendAlternative(offerId) { setBusy(true); setError(""); try { await api.offerAlternative(id, offerId); await loadRecord(true); setToast({ id: Date.now(), message: "Альтернативные условия отправлены клиенту" }); } catch (err) { setError(err.message); } finally { setBusy(false); } }
   async function action(type) {
     const message = comment.trim();
     if (type === "info" && !message) { setError("Напишите, какие сведения нужно предоставить."); return; }
     if (type === "approve" && approvalReason) { setError(approvalReason); return; }
     setBusy(true); setError("");
-    try { if (type === "info") await api.requestInfo(id, { comment: message }); else { await api.decide(id, { decision: type === "approve" ? "APPROVED" : "REJECTED", ...(message ? { comment: message } : {}) }); if (type === "approve") setToast({ id: Date.now(), message: "Заявка одобрена" }); } setActionMode(null); setComment(""); await loadRecord(true); }
+    try {
+      if (type === "info") await api.requestInfo(id, { comment: message });
+      else {
+        await api.decide(id, { decision: type === "approve" ? "APPROVED" : "REJECTED", ...(message ? { comment: message } : {}) });
+        setToast({ id: Date.now(), message: type === "approve" ? "Заявка одобрена" : "Заявка отклонена" });
+      }
+      setActionMode(null); setComment(""); await loadRecord(true);
+    }
     catch (err) { setError(err.message); } finally { setBusy(false); }
   }
   if (loading && !record) return <div className="content content--wide"><button className="back-link" onClick={onBack}>← К очереди</button><Skeleton rows={7} /></div>;

@@ -101,6 +101,8 @@ a { color: inherit; }
 .application-steps li.is-active b { font-weight: 800; }
 .app-toast { animation: app-toast-enter .28s cubic-bezier(.2,.75,.25,1) both; }
 @keyframes app-toast-enter { from { opacity: 0; transform: translate3d(0, 20px, 0); } to { opacity: 1; transform: translate3d(0, 0, 0); } }
+.app-toast--center { animation-name: app-toast-enter-center; }
+@keyframes app-toast-enter-center { from { opacity: 0; transform: translate3d(-50%, 20px, 0); } to { opacity: 1; transform: translate3d(-50%, 0, 0); } }
 @media (prefers-reduced-motion: reduce) { .app-toast { animation-duration: .01ms; } }
 .big-number { align-self: flex-start; color: #e4e4df; font-size: 104px; font-weight: 800; letter-spacing: -.09em; line-height: .8; }
 .panel { padding: 28px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }

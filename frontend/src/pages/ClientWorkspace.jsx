@@ -347,7 +347,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
     try {
       const payload = draftPayload(form);
       const result = saved ? await api.updateApplication(saved.id, { revision: saved.revision, ...payload }) : await api.createApplication(payload);
-      setSaved(result); setForm(withFinancialDefaults(result)); setNotice("Черновик сохранён"); setNoticeType("success"); onSaved(result);
+      setSaved(result); setForm(withFinancialDefaults(result)); onToast("Черновик сохранён"); onSaved(result);
     } catch (err) {
       if (err instanceof ApiError && err.fields.length) setErrors(Object.fromEntries(err.fields.map((item) => [item.field.split(".").pop(), item.message])));
       setNotice(err.message); setNoticeType("error");
