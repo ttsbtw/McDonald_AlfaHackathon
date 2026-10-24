@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -14,17 +14,17 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 MODEL_TAG = "qwen3:4b-instruct-2507-q4_K_M"
-PROMPT_VERSION = "credit-score-explainer-v4"
+PROMPT_VERSION = "credit-score-explainer-v15"
 MAX_INPUT_BYTES = 12_000
-MAX_OUTPUT_BYTES = 8_000
-MAX_RECOMMENDATIONS = 4
+MAX_OUTPUT_BYTES = 12_000
+MAX_RECOMMENDATIONS = 1
 MAX_WARNINGS = 4
 
 
 class AIRecommendation(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     action: Literal["REVIEW_REQUIRED", "VERIFY_DATA", "REQUEST_INFORMATION", "CONTINUE_REVIEW"]
-    text: str = Field(min_length=1, max_length=500)
+    text: str = Field(min_length=1, max_length=160)
     fact_ids: list[str] = Field(min_length=1, max_length=6)
 
 
@@ -42,11 +42,9 @@ class AIEvidence(BaseModel):
 
 
 class AIModelAnswer(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    summary: str = Field(min_length=1, max_length=800)
-    summary_fact_ids: list[str] = Field(min_length=1, max_length=8)
-    recommendations: list[AIRecommendation] = Field(min_length=1, max_length=MAX_RECOMMENDATIONS)
-    data_warnings: list[AIDataWarning] = Field(max_length=MAX_WARNINGS)
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+    summary: str = Field(min_length=1, max_length=1_200)
+    summary_fact_ids: list[str] = Field(min_length=1, max_length=32)
 
 
 class AIAnalysisOut(BaseModel):
@@ -91,6 +89,46 @@ def _canonical_number(value: str) -> str | None:
     return format(number, "f")
 
 
+def _format_ru_number(value: str) -> str:
+    normalized = value.replace(" ", "").replace("\u00a0", "").replace(",", ".")
+    try:
+        number = Decimal(normalized)
+    except InvalidOperation:
+        return value
+    rendered = format(number.normalize(), "f")
+    integer, dot, fraction = rendered.partition(".")
+    sign = "-" if integer.startswith("-") else ""
+    integer = integer.lstrip("-")
+    grouped = re.sub(r"(?<!^)(?=(\d{3})+$)", " ", integer)
+    return sign + grouped + (("," + fraction) if dot and fraction else "")
+
+
+def _percent_value(value) -> str | None:
+    if value is None:
+        return None
+    try:
+        percentage = (Decimal(str(value)) * 100).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        return None
+    return format(percentage, "f")
+
+
+def _format_blocking_cause(cause: str) -> str:
+    match = re.search(
+        r"(Долговая нагрузка)\s+([+-]?\d+(?:[.,]\d+)?)\s*;\s*(?:лимит|предел)\s*([+-]?\d+(?:[.,]\d+)?)",
+        cause, re.IGNORECASE,
+    )
+    if not match:
+        return cause
+
+    def percent(value: str) -> str:
+        number = Decimal(value.replace(",", ".")) * 100
+        rounded = number.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+        return _format_ru_number(format(rounded, "f")) + "%"
+
+    return f"{match.group(1)} — {percent(match.group(2))}; допустимый предел — {percent(match.group(3))}"
+
+
 def _numbers_in_text(value: str) -> set[str]:
     numbers = set()
     for match in re.finditer(r"(?<!\w)\d+(?:[ .\u00a0]\d{3})*(?:[,.]\d+)?(?!\w)", value):
@@ -109,43 +147,124 @@ def _numbers_in_text(value: str) -> set[str]:
     return numbers
 
 
-def _score_phrase(score: int) -> str:
-    last_two = score % 100
-    last = score % 10
-    if 11 <= last_two <= 14:
-        word = "баллов"
-    elif last == 1:
-        word = "балл"
-    elif 2 <= last <= 4:
-        word = "балла"
+_FIELD_LABELS = {
+    "requested_amount": "сумму кредита", "term_months": "срок кредита", "purpose": "цель кредита",
+    "average_monthly_revenue": "среднюю месячную выручку",
+    "average_monthly_operating_expenses": "средние месячные расходы",
+    "existing_monthly_debt_payment": "текущие платежи по долгам",
+}
+
+
+def _safe_brief_summary(result: dict, facts: list[dict], blocking_reasons: list[str]) -> tuple[str, list[str]]:
+    """Build a fact-grounded, human-readable explanation if model text is unsafe."""
+    fact_map = {fact["id"]: fact for fact in facts}
+    fact_ids = set(fact_map)
+    missing_fields = list(result.get("missing_fields") or [])
+    mandatory_blocks = [reason for reason in blocking_reasons if not reason.startswith("Оценка неполная:")]
+    missing_ids = [fact["id"] for fact in facts if fact["id"].startswith("data.missing.")]
+
+    request_parts = []
+    context_ids = []
+    for fact_id, label in (("app.amount", "Запрошено"), ("app.term", "на")):
+        if fact_id in fact_map:
+            value = fact_map[fact_id]["value"]
+            suffix = " ₽" if fact_id == "app.amount" else " месяцев"
+            request_parts.append(f"{label} {_format_ru_number(value)}{suffix}")
+            context_ids.append(fact_id)
+    purpose = fact_map.get("app.purpose")
+    request_context = " ".join(request_parts)
+    if purpose:
+        purpose_text = purpose["value"].strip().rstrip(".")
+        if len(purpose_text) > 180:
+            purpose_text = purpose_text[:177].rsplit(" ", 1)[0] + "…"
+        request_context += f"; цель — {purpose_text}" if request_context else f"Цель — {purpose_text}"
+        context_ids.append("app.purpose")
+    score_ids = [fact_id for fact_id in ("score.score", "score.scale", "score.risk", "score.recommendation")
+                 if fact_id in fact_ids]
+    risk_labels = {"LOW": "низкий", "MEDIUM": "средний", "HIGH": "высокий", "UNKNOWN": "не определён"}
+    risk = risk_labels.get(result.get("risk_level"), "не определён")
+    score_text = f"Скоринг — {result['score']} из 100, риск — {risk}. " if result.get("score") is not None else ""
+
+    if mandatory_blocks:
+        block_ids = [fact["id"] for fact in facts
+                     if fact["id"].startswith(("underwriting.rule.", "score.hard_stop."))]
+        cause = mandatory_blocks[0].split(":", 1)[-1].strip().rstrip(".")
+        cause = _format_blocking_cause(cause)
+        cause_text = f" Причина: {cause}." if cause else ""
+        return (
+            f"{request_context}. {score_text}Заявку блокирует обязательная проверка.{cause_text} "
+            "Завершите разбор по процедуре банка: ИИ не может снять ограничение.",
+            (context_ids + score_ids + block_ids)[:12],
+        )
+
+    if missing_fields or result.get("assessment_status") != "COMPLETED":
+        labels = [_FIELD_LABELS.get(name, name) for name in missing_fields[:3]]
+        if labels:
+            summary = f"{request_context}. Для завершения оценки запросите у клиента " + ", ".join(labels) + ". После получения сведений оценка обновится."
+        else:
+            summary = f"{request_context}. Оценка не завершена: запросите недостающие сведения, чтобы продолжить рассмотрение."
+        return summary, (context_ids + missing_ids + score_ids)[:12] or [facts[0]["id"]]
+
+    if result.get("recommendation") == "APPROVE" and result.get("risk_level") == "LOW":
+        good_factors = [factor.get("code") for factor in (result.get("factors") or [])
+                        if factor.get("points") == factor.get("max_points")]
+        labels = {"BUSINESS_AGE": "срок работы бизнеса", "PAYMENT_HISTORY": "история платежей"}
+        strengths = [labels[code] for code in good_factors if code in labels][:2]
+        strength_text = f"Сильные стороны — {' и '.join(strengths)}. " if strengths else ""
+        factor_ids = [fact["id"] for fact in facts if fact["id"].startswith("score.factor.")]
+        return (f"{request_context}. {score_text}{strength_text}Скоринг рекомендует продолжить рассмотрение; "
+                "итоговое решение остаётся за сотрудником банка.",
+                (context_ids + score_ids + factor_ids)[:12] or [facts[0]["id"]])
+
+    factor_labels = {
+        "BUSINESS_AGE": "срок работы бизнеса",
+        "OPERATING_MARGIN": "рентабельность после расходов",
+        "DEBT_BURDEN": "долговая нагрузка",
+        "PAYMENT_HISTORY": "история платежей",
+    }
+    adverse_factors = []
+    for factor in result.get("factors") or []:
+        try:
+            if Decimal(str(factor.get("points"))) < Decimal(str(factor.get("max_points"))):
+                code = factor.get("code")
+                if code in factor_labels:
+                    adverse_factors.append(code)
+        except (InvalidOperation, TypeError):
+            continue
+    focus_ids = [f"score.factor.{code}" for code in adverse_factors[:2]]
+    focus = " и ".join(factor_labels[code] for code in adverse_factors[:2])
+    factors_text = f"На оценку повлияли {focus}. " if focus else ""
+    if result.get("recommendation") == "DECLINE":
+        next_step = "Скоринговая рекомендация отрицательная, но это не итоговый отказ: решение остаётся за сотрудником банка."
     else:
-        word = "баллов"
-    return f"{score} {word} из 100"
+        next_step = "Скоринг рекомендует дополнительное рассмотрение; передайте заявку сотруднику для решения."
+    summary = f"{request_context}. {score_text}{factors_text}{next_step}"
+    citation_ids = context_ids + score_ids + focus_ids
+    return summary, citation_ids[:12] or [fact["id"] for fact in facts[:1]]
 
 
-SYSTEM_PROMPT = """Ты помощник сотрудника банка, который только поясняет уже рассчитанные факты.
-Используй исключительно переданные факты одной заявки. Не пересчитывай балл и риск,
-не выдумывай сведения, причины, правила или проверки. Не одобряй и не отклоняй кредит,
-не формулируй финальное решение и не заявляй, что заявку можно выдать или рассмотрение
-завершить. Не отменяй ограничения. Рекомендации могут касаться только проверки фактов,
-запроса недостающих сведений или продолжения рассмотрения человеком. Не утверждай, что
-условия продукта соблюдены, если это прямо не подтверждено фактами underwriting. Не
-делай выводы о полноте или согласованности данных, кроме перечисленных пропусков и
-проверенных результатов. Каждое утверждение подкрепляй идентификаторами фактов из входа.
-В предупреждения включай только явные пропуски либо противоречия из входа; если их нет,
-верни пустой список. Не переписывай цифрами суммы, сроки, баллы, даты и коды: исходные
-значения интерфейс покажет отдельно по ссылкам на факты. Дай краткое резюме максимум в
-двух предложениях и одну короткую рекомендацию. Пиши живым, ясным русским языком для
-сотрудника без технической терминологии. Не повторяй английские коды риска, решений и
-проверок. Для сильного профиля назови положительные факторы и подчеркни, что это рекомендация
-скоринга, а не одобрение кредита. Для слабого профиля объясни конкретные неблагоприятные
-факторы из переданных причин/факторов и что сотруднику можно перепроверить или запросить.
-Не советуй менять верные сведения и не обещай, что исправление гарантирует одобрение.
-Верни только JSON строго по переданной схеме. Пиши по-русски."""
+SYSTEM_PROMPT = """Ты помощник сотрудника банка. Самостоятельно сформулируй понятное пояснение по одной заявке: что важно в её обстоятельствах, как это соотносится с результатом скоринга и что логично сделать дальше. Пиши естественно, как сотрудник объяснил бы ситуацию коллеге. Не пересказывай таблицу полей и не используй шаблонный набор фраз. Обычно достаточно 3–5 содержательных предложений; не пытайся перечислить каждый факт. Упоминай только параметры, которые помогают понять именно эту заявку; предложенный следующий шаг должен вытекать из её фактов.
+
+Опирайся только на переданные факты и уже рассчитанные показатели. Не вычисляй финансовые коэффициенты сам и не выдумывай причины, значения, историю клиента или правила банка. В финансовых полях суммы уже указаны в рублях: сохраняй значение точно, не округляй его и не меняй порядок величины. Платежи из анкеты, БКИ и итоговый расчётный платёж после нового кредита — разные показатели; не подменяй один другим. Само по себе совпадение суммы заявки и выручки не доказывает недостоверность выручки. Если цель и выбранный продукт выглядят несвязанными, назови это поводом уточнить план использования средств, а не утверждай, что продукт не подходит или нарушена политика банка, если в фактах нет такого правила. Статусы обязательных проверок и правила underwriting авторитетны: не противоречь им. При блокирующей проверке назови ограничение и его причину; ИИ не может снять или обойти блокировку.
+
+Не принимай кредитное решение за сотрудника: не утверждай, что кредит одобрен или отклонён, и не обещай результат. Каждое числовое утверждение должно подтверждаться указанными идентификаторами фактов. Верни только JSON по переданной схеме с полями summary и summary_fact_ids. В summary_fact_ids перечисли использованные факты. Не добавляй другие поля. Пиши по-русски."""
 
 
 def _prompt_fact_value(fact: dict) -> str:
     value = fact["value"]
+    if fact["id"] in {"app.amount", "app.declared_debt", "app.revenue", "app.expenses",
+                       "app.debt", "bki.monthly_payment", "bki.overdue_amount",
+                       "finance.operating_profit", "finance.new_monthly_payment",
+                       "finance.total_monthly_debt_payment"}:
+        units = {
+            "app.amount": " ₽", "app.declared_debt": " ₽/мес.", "app.revenue": " ₽/мес.",
+            "app.expenses": " ₽/мес.", "app.debt": " ₽/мес.", "bki.monthly_payment": " ₽/мес.",
+            "bki.overdue_amount": " ₽", "finance.operating_profit": " ₽/мес.",
+            "finance.new_monthly_payment": " ₽/мес.", "finance.total_monthly_debt_payment": " ₽/мес.",
+        }
+        return _format_ru_number(value) + units[fact["id"]]
+    if fact["id"] in {"finance.operating_margin", "finance.debt_burden"}:
+        return _format_ru_number(value) + "%"
     localized = {
         "LOW": "низкий",
         "MEDIUM": "средний",
@@ -167,13 +286,45 @@ def _prompt_fact_value(fact: dict) -> str:
         "COMPLETED": "оценка завершена",
         "INSUFFICIENT_DATA": "недостаточно данных",
     }
+    if fact["id"] == "app.product":
+        return {"equipment": "Оборудование", "working_capital": "Оборотные средства"}.get(value, value)
     if fact["id"] in {"score.risk", "score.recommendation", "score.status"} or fact["id"].endswith(".status"):
         return localized.get(value, value)
     if fact["id"].startswith("underwriting.rule."):
         match = re.match(r"([^:]+):\s*(PASS|REVIEW|REJECT)(.*)", value)
         if match:
+            if match.group(1) == "DEBT_BURDEN":
+                burden_match = re.search(
+                    r"Долговая нагрузка\s+([+-]?\d+(?:[.,]\d+)?)\s*;\s*лимит\s*([+-]?\d+(?:[.,]\d+)?)",
+                    match.group(3), re.IGNORECASE,
+                )
+                if burden_match:
+                    def percent(raw_value):
+                        number = (Decimal(raw_value.replace(",", ".")) * 100).quantize(
+                            Decimal("0.1"), rounding=ROUND_HALF_UP)
+                        return _format_ru_number(format(number, "f")) + "%"
+                    burden, limit = map(percent, burden_match.groups())
+                    if match.group(2) == "PASS":
+                        return f"Долговая нагрузка в пределах лимита продукта: {burden}; допустимый предел — {limit}."
+                    if match.group(2) == "REJECT":
+                        return f"Долговая нагрузка выше лимита продукта: {burden}; допустимый предел — {limit}."
             reason = {"PASS": "пройдено", "REVIEW": "нужна ручная проверка", "REJECT": "ограничение"}[match.group(2)]
             return f"{match.group(1)}: {reason}{match.group(3)}"
+    if fact["id"].startswith("score.factor."):
+        code = fact["id"].rsplit(".", 1)[-1]
+        labels = {
+            "BUSINESS_AGE": "Срок работы бизнеса",
+            "OPERATING_MARGIN": "Прибыльность после расходов",
+            "DEBT_BURDEN": "Кредитные платежи относительно свободного дохода",
+            "PAYMENT_HISTORY": "История платежей",
+        }
+        match = re.match(r"\s*(\d+(?:\.\d+)?)\s+из\s+(\d+(?:\.\d+)?):\s*(.*)", value)
+        if match:
+            qualifier = "полный результат по шкале" if Decimal(match.group(1)) == Decimal(match.group(2)) else "результат ниже максимума по шкале"
+            explanation = match.group(3).split("; вклад", 1)[0]
+            explanation = re.split(r";\s*(?:при|если|в случае)\b", explanation, maxsplit=1,
+                                   flags=re.IGNORECASE)[0].strip().rstrip(".; ")
+            return f"{labels.get(code, 'Фактор оценки')}: {qualifier}. Факт из оценки: {explanation}. Не делай выводов сверх него."
     return value
 
 
@@ -196,7 +347,10 @@ def make_facts(application, company, assessment, compliance_review=None) -> tupl
     add("company.registration_date", "Дата регистрации", input_data.get("registration_date") or company.registration_date)
     add("app.revenue", "Средняя месячная выручка, руб.", input_data.get("average_monthly_revenue"))
     add("app.expenses", "Средние месячные расходы, руб.", input_data.get("average_monthly_operating_expenses"))
-    add("app.debt", "Существующие месячные платежи, руб.", input_data.get("existing_monthly_debt_payment"))
+    add("app.declared_debt", "Платежи, указанные в анкете, руб./мес.",
+        getattr(application, "existing_monthly_debt_payment", None))
+    add("app.debt", "Существующие месячные платежи, учтённые в скоринге, руб./мес.",
+        input_data.get("existing_monthly_debt_payment"))
     add("score.score", "Балл скоринга из 100", result.get("score"))
     add("score.scale", "Максимальный балл", 100 if result.get("score") is not None else None)
     add("score.risk", "Оценка риска", result.get("risk_level"))
@@ -211,6 +365,17 @@ def make_facts(application, company, assessment, compliance_review=None) -> tupl
         explanation = factor.get("explanation") or ""
         value = f"{points} из {maximum}: {explanation}" if points is not None and maximum is not None else explanation
         add(f"score.factor.{code}", "Фактор, повлиявший на скоринг", value)
+    features = result.get("features") or {}
+    add("finance.operating_profit", "Выручка за вычетом расходов по расчёту скоринга, руб./мес.",
+        features.get("monthly_operating_profit"))
+    add("finance.operating_margin", "Доля выручки за вычетом расходов, рассчитанная скорингом, %",
+        _percent_value(features.get("operating_margin")))
+    add("finance.new_monthly_payment", "Расчётный платёж по запрашиваемому кредиту, руб./мес.",
+        features.get("new_monthly_payment"))
+    add("finance.total_monthly_debt_payment", "Все платежи после нового кредита, руб./мес.",
+        features.get("total_monthly_debt_payment"))
+    add("finance.debt_burden", "Расчётная долговая нагрузка после нового кредита, %",
+        _percent_value(features.get("debt_burden")))
     for index, stop in enumerate(result.get("hard_stops") or []):
         add(f"score.hard_stop.{index}", "Код обязательного ограничения", stop)
     for check in checks:
@@ -223,6 +388,7 @@ def make_facts(application, company, assessment, compliance_review=None) -> tupl
         add(f"{key}.status", f"Результат {key.upper()}", report.get("status"))
         add(f"{key}.reason", f"Код причины {key.upper()}", report.get("reason_code"))
         if key == "bki":
+            add("bki.monthly_payment", "Ежемесячный платёж по данным БКИ, руб./мес.", report.get("monthly_payment"))
             add("bki.overdue_amount", "Просроченная задолженность, руб.", report.get("current_overdue_amount"))
             add("bki.overdue_days", "Максимальная просрочка за 12 месяцев, дней", report.get("max_overdue_days_12m"))
 
@@ -277,7 +443,7 @@ def analyze_with_ollama(application, company, assessment, settings, compliance_r
         "format": AIModelAnswer.model_json_schema(),
         "stream": False,
         "think": False,
-        "options": {"temperature": 0, "num_predict": 512, "num_ctx": 4096},
+        "options": {"temperature": 0, "num_predict": 768, "num_ctx": 4096},
     }
     url = settings.ollama_base_url.rstrip("/") + "/api/chat"
     request = Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
@@ -307,62 +473,11 @@ def analyze_with_ollama(application, company, assessment, settings, compliance_r
 
     if blocking_reasons:
         # A hard stop is authoritative: the model cannot soften or remove it.
-        missing_fields = list(result.get("missing_fields") or [])
-        mandatory_blocking_reasons = [
-            reason for reason in blocking_reasons
-            if not reason.startswith("Оценка неполная:")
-        ]
-        blocking_fact_ids = [fact["id"] for fact in facts
-                             if fact["id"].startswith(("underwriting.rule.", "score.hard_stop.", "data.missing."))]
-        score_fact_ids = [fact_id for fact_id in ("score.score", "score.scale", "score.risk", "score.recommendation")
-                          if fact_id in {fact["id"] for fact in facts}]
-        missing_fact_ids = [fact["id"] for fact in facts if fact["id"].startswith("data.missing.")]
-        if missing_fields and not mandatory_blocking_reasons:
-            field_labels = {
-                "requested_amount": "сумма кредита", "term_months": "срок кредита", "purpose": "цель кредита",
-                "average_monthly_revenue": "средняя месячная выручка",
-                "average_monthly_operating_expenses": "средние месячные расходы",
-                "existing_monthly_debt_payment": "текущие платежи по долгам",
-            }
-            missing_labels = [field_labels.get(name, name) for name in missing_fields[:4]]
-            answer.summary = "Для завершения рассмотрения запросите недостающие сведения: " + ", ".join(missing_labels) + "."
-            answer.summary_fact_ids = (missing_fact_ids + score_fact_ids)[:8]
-            answer.recommendations = [AIRecommendation(
-                action="REQUEST_INFORMATION",
-                text="Запросите у клиента перечисленные обязательные сведения, затем обновите оценку.",
-                fact_ids=missing_fact_ids[:6] or answer.summary_fact_ids[:6],
-            )]
-        else:
-            answer.summary = (
-                "Заявку блокирует обязательная проверка. Её результат нужно разрешить по установленной процедуре; "
-                "ИИ не может снять это ограничение."
-            )
-            answer.summary_fact_ids = (blocking_fact_ids[:4] + score_fact_ids)[:8]
-            answer.recommendations = [AIRecommendation(
-                action="REVIEW_REQUIRED",
-                text="Выдача заблокирована обязательной проверкой. Причину следует разрешать только по установленной процедуре.",
-                fact_ids=[fact["id"] for fact in facts if fact["id"].startswith(("underwriting.", "score.hard_stop."))][:6]
-                       or answer.summary_fact_ids[:6],
-            )]
-    else:
-        answer.recommendations = [
-            item for item in answer.recommendations if item.action != "REVIEW_REQUIRED"
-        ] or [AIRecommendation(
-            action="CONTINUE_REVIEW", text="Продолжить рассмотрение по установленной процедуре.",
-            fact_ids=answer.summary_fact_ids[:6],
-        )]
+        answer.summary, answer.summary_fact_ids = _safe_brief_summary(result, facts, blocking_reasons)
+
     valid_ids = {fact["id"] for fact in facts}
-    cited = set(answer.summary_fact_ids)
-    for item in answer.recommendations:
-        cited.update(item.fact_ids)
-    for item in answer.data_warnings:
-        cited.update(item.fact_ids)
-    if not cited.issubset(valid_ids):
+    if not set(answer.summary_fact_ids).issubset(valid_ids):
         raise InvalidModelAnswer("Ответ модели содержит ссылки на отсутствующие факты.")
-    evidence_by_id = {fact["id"]: fact for fact in facts}
-    narratives = [(answer.summary, answer.summary_fact_ids)]
-    narratives.extend((item.text, item.fact_ids) for item in answer.recommendations)
-    narratives.extend((item.text, item.fact_ids) for item in answer.data_warnings)
     forbidden_decision_claim = re.compile(
         r"(заявк\w*.{0,35}(одобр|отклон|отказ)|кредит\w*.{0,35}(одобр|отклон|отказ)|"
         r"решени\w*.{0,20}(одобр|отказ)|можно.{0,15}выдать|выдать.{0,15}кредит|"
@@ -370,143 +485,28 @@ def analyze_with_ollama(application, company, assessment, settings, compliance_r
         r"завершено.{0,20}без.{0,20}провер|скоринг.{0,30}(подтвержд.{0,20}одобр|подтверждает одобр))",
         re.IGNORECASE,
     )
-    product_claim = re.compile(r"соответств\w*.{0,30}(услов|требован)", re.IGNORECASE)
-    completeness_claim = re.compile(r"все сведения.{0,20}(полны|согласован)", re.IGNORECASE)
-    no_review_claim = re.compile(r"(не требует.{0,20}провер|без дополнительн\w*.{0,20}провер)", re.IGNORECASE)
-    passed_checks_claim = re.compile(
-        r"(?:(?:все\s+)?(?:обязательн\w+\s+)?(?:провер\w*|правил\w*).{0,60}"
-        r"(?:пройден\w*|выполн\w*|успеш\w*|соблюден\w*)|"
-        r"(?:пройден\w*|выполн\w*|успеш\w*|соблюден\w*).{0,60}(?:провер\w*|правил\w*))",
-        re.IGNORECASE,
-    )
-    unsafe_text = False
-    try:
-        for narrative, fact_ids in narratives:
-            if forbidden_decision_claim.search(narrative):
-                raise InvalidModelAnswer("Ответ модели содержит формулировку итогового кредитного решения.")
-            if product_claim.search(narrative):
-                underwriting_rules = [fact for fact in facts if fact["id"].startswith("underwriting.rule.")]
-                if not underwriting_rules or any(": PASS;" not in fact["value"] for fact in underwriting_rules):
-                    raise InvalidModelAnswer("Ответ модели содержит неподтверждённый вывод о проверках или условиях.",
-                                             code="UNSUPPORTED_CHECK_CLAIM", narrative=narrative)
-                for fact in underwriting_rules:
-                    if fact["id"] not in fact_ids:
-                        fact_ids.append(fact["id"])
-                limit = 8 if fact_ids is answer.summary_fact_ids else 6
-                if len(fact_ids) > limit:
-                    raise InvalidModelAnswer("Ответ модели ссылается на слишком много фактов.")
-            if completeness_claim.search(narrative) and (result.get("missing_fields") or result.get("assessment_status") != "COMPLETED"):
-                raise InvalidModelAnswer("Ответ модели утверждает, что неполные данные заполнены.",
-                                         code="UNSUPPORTED_COMPLETENESS_CLAIM", narrative=narrative)
-            if no_review_claim.search(narrative):
-                raise InvalidModelAnswer("Ответ модели утверждает, что дополнительная проверка не нужна.",
-                                         code="UNSUPPORTED_REVIEW_CLAIM", narrative=narrative)
-            if passed_checks_claim.search(narrative):
-                check_fact_ids = {
-                    fact["id"] for fact in facts
-                    if (fact["id"].startswith("check.") and fact["id"].endswith(".status"))
-                    or fact["id"].startswith("underwriting.rule.")
-                    or fact["id"] in {"bki.status", "compliance.status", "underwriting.status"}
-                }
-                check_facts = [fact for fact in facts if fact["id"] in check_fact_ids]
-                if not check_fact_ids or not check_fact_ids.issubset(set(fact_ids)):
-                    raise InvalidModelAnswer("Общий вывод о проверках не ссылается на все исходные результаты.",
-                                             code="UNSUPPORTED_CHECK_CLAIM", narrative=narrative)
-                statuses_are_clear = all(
-                    fact["value"].split(":", 1)[-1].strip().split(";", 1)[0] in
-                    {"PASS", "AVAILABLE", "CLEAR", "NO_HISTORY"}
-                    for fact in check_facts
-                )
-                if not statuses_are_clear:
-                    raise InvalidModelAnswer("Ответ модели утверждает, что обязательные проверки пройдены.",
-                                             code="UNSUPPORTED_CHECK_CLAIM", narrative=narrative)
-            allowed_numbers = set()
-            for fact_id in fact_ids:
-                allowed_numbers.update(_numbers_in_text(evidence_by_id[fact_id]["value"]))
-            unsupported_numbers = _numbers_in_text(narrative) - allowed_numbers
-            if unsupported_numbers:
-                raise InvalidModelAnswer("Ответ модели содержит число; проверьте точные значения в списке исходных фактов.",
-                                         code="UNSUPPORTED_NUMBER", number=sorted(unsupported_numbers)[0], narrative=narrative)
-    except InvalidModelAnswer:
-        unsafe_text = True
-        answer.data_warnings = []
-        missing_fields = list(result.get("missing_fields") or [])
-        if missing_fields or result.get("assessment_status") != "COMPLETED":
-            answer.summary = "Оценка неполная. В списке фактов указаны недостающие обязательные данные."
-            answer.summary_fact_ids = ([fact["id"] for fact in facts if fact["id"].startswith("data.missing.")][:8]
-                                       or (["score.status"] if "score.status" in valid_ids else [facts[0]["id"]]))
-        elif blocking_reasons:
-            score_fact_ids = [fact_id for fact_id in ("score.score", "score.scale", "score.risk", "score.recommendation")
-                              if fact_id in valid_ids]
-            blocking_fact_ids = [fact["id"] for fact in facts
-                                 if fact["id"].startswith(("underwriting.rule.", "score.hard_stop."))]
-            answer.summary = (
-                "Заявку блокирует обязательная проверка. Её результат нужно разрешить по установленной процедуре; "
-                "ИИ не может снять это ограничение."
-            )
-            answer.summary_fact_ids = (blocking_fact_ids[:4] + score_fact_ids)[:8]
-        elif result.get("recommendation") == "APPROVE" and result.get("risk_level") == "LOW":
-            answer.summary = (
-                f"По текущим данным профиль выглядит сильным: {_score_phrase(result['score'])}, риск низкий. "
-                "Скоринг даёт положительную рекомендацию; итоговое решение остаётся за сотрудником."
-            )
-            answer.summary_fact_ids = [
-                fact_id for fact_id in ("score.score", "score.scale", "score.risk", "score.recommendation")
-                if fact_id in valid_ids
-            ]
-        else:
-            score_ids = [fact_id for fact_id in ("score.score", "score.scale", "score.risk", "score.recommendation")
-                         if fact_id in valid_ids]
-            issue_ids = [fact["id"] for fact in facts
-                         if fact["id"].startswith(("score.reason.", "score.factor."))]
-            parts = []
-            if result.get("score") is not None:
-                parts.append(f"Балл скоринга: {result['score']} из 100.")
-            if result.get("risk_level"):
-                risk = {"LOW": "низкий", "MEDIUM": "средний", "HIGH": "высокий"}.get(
-                    result["risk_level"], "не определён")
-                parts.append(f"Оценка риска — {risk}.")
-            if result.get("recommendation"):
-                recommendation = {
-                    "APPROVE": "положительная, но это не итоговое решение банка",
-                    "REVIEW": "нужно дополнительное рассмотрение",
-                    "DECLINE": "отрицательная, но это не итоговое решение банка",
-                    "REQUEST_INFO": "нужно запросить сведения",
-                }.get(result["recommendation"], "не сформирована")
-                parts.append(f"Рекомендация скоринга: {recommendation}.")
-            if issue_ids and result.get("recommendation") in {"DECLINE", "REVIEW"}:
-                parts.append("Факторы, повлиявшие на оценку: " + "; ".join(
-                    evidence_by_id[fact_id]["value"].rstrip(".; ") for fact_id in issue_ids[:2]
-                ) + ".")
-            answer.summary = " ".join(parts) or "Сохранённая оценка сформирована; см. факты заявки и результаты проверок."
-            answer.summary_fact_ids = (score_ids + issue_ids[:2])[:8]
-        if not blocking_reasons and missing_fields:
-            answer.recommendations = [AIRecommendation(
-                action="REQUEST_INFORMATION",
-                text="Запросить недостающие обязательные сведения, перечисленные в предупреждениях.",
-                fact_ids=[fact["id"] for fact in facts if fact["id"].startswith("data.missing.")][:6]
-                    or answer.summary_fact_ids[:6],
-            )]
-        elif not blocking_reasons and result.get("recommendation") in {"DECLINE", "REVIEW"}:
-            issue_ids = [fact["id"] for fact in facts
-                         if fact["id"].startswith(("score.reason.", "score.factor."))]
-            answer.recommendations = [AIRecommendation(
-                action="VERIFY_DATA",
-                text=("Перепроверьте показатели, перечисленные среди факторов оценки. Если сведения актуальны, "
-                      "сотрудник может рассмотреть дальнейшие варианты в рамках правил банка."),
-                fact_ids=(issue_ids[:5] or answer.summary_fact_ids[:5]),
-            )]
-        elif not blocking_reasons:
-            answer.recommendations = [AIRecommendation(
-                action="CONTINUE_REVIEW", text="Продолжить рассмотрение человеком по установленной процедуре.",
-                fact_ids=answer.summary_fact_ids[:6],
-            )]
-    model_warnings_ignored = bool(answer.data_warnings)
-    answer.data_warnings = []
+    unsafe_text = bool(forbidden_decision_claim.search(answer.summary))
+    if unsafe_text:
+        answer.summary, answer.summary_fact_ids = _safe_brief_summary(result, facts, blocking_reasons)
+
+    action_by_recommendation = {
+        "APPROVE": "CONTINUE_REVIEW", "REVIEW": "VERIFY_DATA",
+        "DECLINE": "VERIFY_DATA", "REQUEST_INFO": "REQUEST_INFORMATION",
+    }
+    action = ("REVIEW_REQUIRED" if blocking_reasons and any(
+        not reason.startswith("Оценка неполная:") for reason in blocking_reasons
+    ) else action_by_recommendation.get(result.get("recommendation"), "CONTINUE_REVIEW"))
+    recommendation_text = {
+        "REVIEW_REQUIRED": "Завершите обязательную проверку по процедуре банка.",
+        "VERIFY_DATA": "Передайте заявку сотруднику для дополнительного рассмотрения.",
+        "REQUEST_INFORMATION": "Запросите у клиента недостающие сведения.",
+        "CONTINUE_REVIEW": "Передайте заявку сотруднику для итогового решения.",
+    }[action]
+    recommendations = [AIRecommendation(
+        action=action, text=recommendation_text, fact_ids=answer.summary_fact_ids[:6],
+    )]
     used_ids = set(answer.summary_fact_ids)
-    for item in answer.recommendations:
-        used_ids.update(item.fact_ids)
-    for item in answer.data_warnings:
+    for item in recommendations:
         used_ids.update(item.fact_ids)
     missing_fields = list(result.get("missing_fields") or [])
     field_labels = {
@@ -528,7 +528,7 @@ def analyze_with_ollama(application, company, assessment, settings, compliance_r
         prompt_version=PROMPT_VERSION, summary=answer.summary,
         summary_fact_ids=answer.summary_fact_ids,
         evidence=[AIEvidence(**fact) for fact in facts if fact["id"] in used_ids],
-        recommendations=answer.recommendations, data_warnings=data_warnings,
+        recommendations=recommendations, data_warnings=data_warnings,
         blocking_reasons=blocking_reasons, is_blocked=bool(blocking_reasons),
-        used_safe_fallback=unsafe_text or model_warnings_ignored,
+        used_safe_fallback=unsafe_text,
     )

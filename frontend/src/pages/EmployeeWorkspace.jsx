@@ -208,7 +208,7 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
   }
   async function sendAlternative(offerId) { setBusy(true); setError(""); try { await api.offerAlternative(id, offerId); await loadRecord(true); setToast({ id: Date.now(), message: "Альтернативные условия отправлены клиенту" }); } catch (err) { setError(err.message); } finally { setBusy(false); } }
   async function analyzeScoring() {
-    if (aiAnalysisBusy) return;
+    if (aiAnalysisBusy || finalDecision) return;
     setAiAnalysisBusy(true); setAiAnalysisError(""); setAiAnalysis(null);
     try {
       setAiAnalysis(await api.analyzeBankScoring(id));
@@ -229,6 +229,7 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
       }
       else {
         await api.decide(id, { decision: type === "approve" ? "APPROVED" : "REJECTED", ...(message ? { comment: message } : {}) });
+        setAiAnalysisError("");
         setToast({ id: Date.now(), message: type === "approve" ? "Заявка одобрена" : "Заявка отклонена" });
       }
       setActionMode(null); setComment(""); await loadRecord(true);
@@ -254,7 +255,7 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
     />
     <ChecksPanel assessment={assessment} />
     <AssessmentSummary assessment={assessment} />
-    <AIAnalysisPanel result={aiAnalysis} loading={aiAnalysisBusy} error={aiAnalysisError} onAnalyze={analyzeScoring} hasAssessment={Boolean(assessment)} />
+    <AIAnalysisPanel result={aiAnalysis} loading={aiAnalysisBusy} error={aiAnalysisError} onAnalyze={analyzeScoring} hasAssessment={Boolean(assessment)} inactive={finalDecision} />
     {requiresComplianceReview(assessment) && <ComplianceReviewPanel application={record} review={complianceReview} busy={busy} onSaved={() => loadRecord(true)} setBusy={setBusy} setError={setError} />}
     <AlternativePanel application={record} alternativeSet={alternatives} busy={busy} onGenerate={generateAlternatives} onOffer={sendAlternative} />
     <AuditPanel id={id} audit={audit} onError={setError} />
@@ -297,7 +298,7 @@ function ChecksPanel({ assessment }) {
   const compliance = result.check_reports?.compliance;
   const underwriting = result.underwriting || {};
   return <CollapsiblePanel className="checks-panel" eyebrow="Обязательные проверки" title="БКИ, комплаенс и правила кредитования" summary={<span className={`result-pill result-pill--${String(underwriting.status || "unknown").toLowerCase()}`}>{underwritingLabels[underwriting.status] || "Нет результата"}</span>}><div className="check-report-grid">
-    <article><div><span>БКИ</span><b className={`result-text result-text--${reportTone(bki?.status)}`}>{reportStatusLabels[bki?.status] || "Нет результата"}</b></div><dl><div><dt>Согласие</dt><dd>{bki?.consent_confirmed ? "Получено" : "Не получено"}</dd></div><div><dt>Текущая просрочка</dt><dd>{formatMoneyRub(bki?.current_overdue_amount || 0)}</dd></div><div><dt>Макс. просрочка</dt><dd>{bki?.max_overdue_days_12m === null || bki?.max_overdue_days_12m === undefined ? "—" : `${bki.max_overdue_days_12m} дн.`}</dd></div></dl><p>{["ERROR", "UNAVAILABLE"].includes(bki?.status) ? "Техническая недоступность требует ручной проверки и не считается отказом." : checkReasonLabels[bki?.reason_code] || "Синтетический отчёт кредитной истории."}</p></article>
+    <article><div><span>БКИ</span><b className={`result-text result-text--${reportTone(bki?.status)}`}>{reportStatusLabels[bki?.status] || "Нет результата"}</b></div><dl><div><dt>Согласие</dt><dd>{bki?.consent_confirmed ? "Получено" : "Не получено"}</dd></div><div><dt>Ежемесячный платёж по данным БКИ</dt><dd>{bki?.monthly_payment === null || bki?.monthly_payment === undefined ? "—" : `${formatMoneyRub(bki.monthly_payment)}/мес.`}</dd></div><div><dt>Текущая просрочка</dt><dd>{formatMoneyRub(bki?.current_overdue_amount || 0)}</dd></div><div><dt>Макс. просрочка</dt><dd>{bki?.max_overdue_days_12m === null || bki?.max_overdue_days_12m === undefined ? "—" : `${bki.max_overdue_days_12m} дн.`}</dd></div></dl><p>{["ERROR", "UNAVAILABLE"].includes(bki?.status) ? "Техническая недоступность требует ручной проверки и не считается отказом." : checkReasonLabels[bki?.reason_code] || "Синтетический отчёт кредитной истории."}</p></article>
     <article><div><span>Комплаенс</span><b className={`result-text result-text--${reportTone(compliance?.status)}`}>{reportStatusLabels[compliance?.status] || "Нет результата"}</b></div><dl><div><dt>Ручной разбор</dt><dd>{compliance?.requires_manual_review || compliance?.status === "ERROR" ? "Требуется" : "Не требуется"}</dd></div><div><dt>Источник</dt><dd>Синтетический реестр</dd></div></dl><p>{compliance?.explanation || (compliance?.status === "ERROR" ? "Техническая ошибка требует ручного разбора и не означает отказ." : "Совпадений в демо-реестре нет.")}</p></article>
   </div><div className="underwriting-rules"><h3>Правила кредитования</h3>{underwriting.rules?.length ? underwriting.rules.map((rule) => <div key={rule.code}><span className={`rule-outcome rule-outcome--${String(rule.outcome).toLowerCase()}`}>{outcomeLabels[rule.outcome] || "Результат"}</span><div><strong>{underwritingRuleLabels[rule.code] || "Дополнительная проверка"}</strong><p>{rule.explanation || "Результат правила сохранён в оценке."}</p></div></div>) : <p className="muted">Правила не рассчитаны.</p>}</div></CollapsiblePanel>;
 }
@@ -362,42 +363,25 @@ function AcceptedAlternativeReview({ application, offer, originalAssessment }) {
   return <section className="accepted-review"><div className="accepted-review__heading"><span className="eyebrow eyebrow--red">Клиент принял предложение</span><h2>{isFinal ? "Условия, рассмотренные банком" : "Новые условия для итогового решения"}</h2></div><div className="accepted-review__comparison"><div className="accepted-review__side accepted-review__side--original"><small>Исходная заявка</small><strong><s>{formatMoneyRub(application.requested_amount)}</s></strong><span><s>{application.term_months} мес.</s></span><dl><div><dt>Платёж</dt><dd><s>{formatMoneyRub(original.features?.new_monthly_payment)}</s></dd></div><div><dt>Балл</dt><dd><s>{original.score ?? "—"} / 100</s></dd></div></dl></div><span className="accepted-review__arrow">→</span><div className="accepted-review__side accepted-review__side--accepted"><small>Принятый вариант</small><strong>{formatMoneyRub(offer.amount)}</strong><span>{offer.term_months} мес.</span><dl><div><dt>Платёж</dt><dd>{formatMoneyRub(offer.monthly_payment)}</dd></div><div><dt>Балл</dt><dd>{rescored.score ?? "—"} / 100</dd></div></dl></div></div></section>;
 }
 
-const aiActionLabels = {
-  REVIEW_REQUIRED: "Обязательная проверка",
-  VERIFY_DATA: "Проверить данные",
-  REQUEST_INFORMATION: "Запросить сведения",
-  CONTINUE_REVIEW: "Продолжить рассмотрение",
-};
-
-function AIAnalysisPanel({ result, loading, error, onAnalyze, hasAssessment }) {
-  const evidenceById = Object.fromEntries((result?.evidence || []).map((fact) => [fact.id, fact]));
+function AIAnalysisPanel({ result, loading, error, onAnalyze, hasAssessment, inactive }) {
   const mandatoryBlock = (result?.blocking_reasons || []).some((reason) => !reason.startsWith("Оценка неполная:"));
-  return <section className="panel ai-analysis">
+  return <section className={`panel ai-analysis${inactive ? " ai-analysis--inactive" : ""}`}>
     <div className="panel-title"><div><span className="eyebrow eyebrow--red">Локальная Ollama</span><h2>Пояснение скоринга с помощью ИИ</h2><p>Анализ опирается на текущую оценку и не меняет баллы, проверки, статус или решение сотрудника.</p></div></div>
-    <Button variant="secondary" busy={loading} disabled={!hasAssessment} onClick={onAnalyze}>
-      {loading ? "Анализируем заявку…" : "Проанализировать скоринг с помощью ИИ"}
+    {inactive && <p className="ai-analysis__inactive-note">{result ? "Рассмотрение завершено. Сохранённый анализ доступен только для просмотра; повторный анализ отключён." : "Рассмотрение завершено. Новый ИИ-анализ недоступен."}</p>}
+    <Button variant="secondary" busy={loading} disabled={inactive || !hasAssessment || loading || Boolean(result)} onClick={onAnalyze}>
+      {inactive ? "Заявка закрыта — анализ недоступен" : loading ? "Анализируем заявку…" : result ? "Анализ уже выполнен" : "Проанализировать скоринг с помощью ИИ"}
     </Button>
-    {error && <><Alert type="error" title="Не удалось выполнить анализ">{error}</Alert><Button variant="ghost" disabled={loading} onClick={onAnalyze}>Повторить анализ</Button></>}
-    {loading && <p role="status" className="muted">Ожидаем ответ локальной модели. Повторный запуск заблокирован до завершения запроса.</p>}
+    {error && !inactive && <><Alert type="error" title="Не удалось выполнить анализ">{error}</Alert><Button variant="ghost" disabled={loading} onClick={onAnalyze}>Повторить анализ</Button></>}
+    {loading && !inactive && <p role="status" className="muted">Ожидаем ответ локальной модели. Повторный запуск заблокирован до завершения запроса.</p>}
     {result && <div className="ai-analysis__result">
       <p className="ai-analysis__meta">Последний анализ: {new Date(result.analyzed_at).toLocaleString("ru-RU")}</p>
-      {result.is_blocked && <Alert type={mandatoryBlock ? "error" : "info"}
-        title={mandatoryBlock ? "Есть ограничение обязательной проверки" : "Оценка неполная"}>
-        {result.blocking_reasons.join(" · ")} {mandatoryBlock ? "ИИ не может отменить это ограничение." : "Запросите сведения, указанные ниже, и обновите оценку."}
-      </Alert>}
-      {result.used_safe_fallback && <Alert type="info" title="Показан проверенный пересказ">Текст модели содержал неподтверждённые формулировки. Здесь отображены только выводы, собранные backend из исходных фактов заявки.</Alert>}
-      <div className="ai-analysis__section"><h3>Краткое резюме</h3><p>{localizeAiText(result.summary)}</p><FactReferences ids={result.summary_fact_ids} evidence={evidenceById} /></div>
-      <div className="ai-analysis__section"><h3>Дальнейшее рассмотрение</h3>{result.recommendations.map((item, index) => <article key={`${item.action}-${index}`}><strong>{aiActionLabels[item.action] || "Рекомендация"}</strong><p>{localizeAiText(item.text)}</p><FactReferences ids={item.fact_ids} evidence={evidenceById} /></article>)}</div>
-      <div className="ai-analysis__section"><h3>Недостающие или противоречивые данные</h3>{result.data_warnings.length ? result.data_warnings.map((item, index) => <article key={index}><p>{item.text}</p><FactReferences ids={item.fact_ids} evidence={evidenceById} /></article>) : <p>Явных пропусков или противоречий в переданных фактах не указано.</p>}</div>
+      <div className={`ai-analysis__brief${mandatoryBlock ? " ai-analysis__brief--blocked" : ""}`}>
+        <h3>{mandatoryBlock ? "Обязательное ограничение" : "Кратко о заявке"}</h3>
+        <p>{localizeAiText(result.summary)}</p>
+      </div>
     </div>}
     {!hasAssessment && <p className="muted">Для анализа нужна сохранённая оценка заявки.</p>}
   </section>;
-}
-
-function FactReferences({ ids, evidence }) {
-  const facts = ids.map((id) => evidence[id]).filter(Boolean);
-  if (!facts.length) return null;
-  return <ul className="ai-analysis__facts">{facts.map((fact) => <li key={fact.id}><b>{fact.label}:</b> {localizeAiFact(fact)}</li>)}</ul>;
 }
 
 const aiFactLabels = {
@@ -409,21 +393,6 @@ const aiFactLabels = {
   POTENTIAL_MATCH: "возможное совпадение", CONFIRMED_MATCH: "совпадение подтверждено",
   COMPLETED: "оценка завершена", INSUFFICIENT_DATA: "недостаточно данных",
 };
-const aiRuleLabels = {
-  MIN_BUSINESS_AGE: "Срок работы бизнеса", PRODUCT_AMOUNT_LIMIT: "Сумма по условиям продукта",
-  DEBT_BURDEN: "Долговая нагрузка", BKI_HISTORY: "Кредитная история",
-  COMPLIANCE_CLEAR: "Проверка обязательных реестров", COMPLIANCE_CONFIRMED_MATCH: "Совпадение в обязательном реестре",
-  COMPLIANCE_POTENTIAL_MATCH: "Возможное совпадение в обязательном реестре",
-};
-
-function localizeAiFact(fact) {
-  if (fact.id.startsWith("underwriting.rule.")) {
-    const match = fact.value.match(/^([^:]+):\s*(PASS|REVIEW|REJECT)(.*)$/);
-    if (match) return `${aiRuleLabels[match[1]] || match[1]}: ${aiFactLabels[match[2]] || match[2]}${match[3]}`;
-  }
-  return aiFactLabels[fact.value] || reasonCodeLabels[fact.value] || fact.value;
-}
-
 function localizeAiText(text) {
   const translations = { ...aiFactLabels, ...reasonCodeLabels };
   const tokens = Object.keys(translations).sort((left, right) => right.length - left.length).join("|");

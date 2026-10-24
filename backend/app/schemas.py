@@ -190,8 +190,8 @@ class AIAnalysisOut(APIModel):
     analyzed_at: datetime
     model: str
     prompt_version: str
-    summary: str = Field(min_length=1, max_length=800)
-    summary_fact_ids: list[str] = Field(min_length=1, max_length=8)
+    summary: str = Field(min_length=1, max_length=1200)
+    summary_fact_ids: list[str] = Field(min_length=1, max_length=32)
     evidence: list[AIEvidenceOut]
     recommendations: list[AIRecommendationOut]
     data_warnings: list[AIDataWarningOut]

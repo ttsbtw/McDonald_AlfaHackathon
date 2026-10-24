@@ -15,6 +15,7 @@ from .ai_analysis import (
     InvalidModelAnswer,
     OllamaModelMissing,
     OllamaUnavailable,
+    PROMPT_VERSION,
     analyze_with_ollama,
 )
 from .alternatives import generate_alternatives
@@ -431,8 +432,9 @@ def bank_ai_analysis_result(application_id: UUID, db: DB, user: BankEmployee):
         .order_by(Assessment.application_revision.desc())
         .limit(1)
     )
-    if (assessment is None or assessment.application_revision + 1 != item.revision
-            or saved.assessment_id != assessment.id):
+    final_decision = item.status in {"APPROVED", "REJECTED"}
+    if (assessment is None or (not final_decision and assessment.application_revision + 1 != item.revision)
+            or saved.assessment_id != assessment.id or saved.prompt_version != PROMPT_VERSION):
         db.delete(saved)
         db.commit()
         return None
@@ -445,6 +447,8 @@ def bank_ai_analysis(application_id: UUID, request: Request, db: DB, user: BankE
     item = db.get(Application, application_id)
     if item is None or item.status == "DRAFT":
         raise APIError(404, "APPLICATION_NOT_FOUND", "Заявка не найдена.")
+    if item.status in {"APPROVED", "REJECTED"}:
+        raise APIError(409, "APPLICATION_FINAL", "Рассмотрение завершено. Новый ИИ-анализ недоступен.")
     assessment = current_assessment(db, item)
     company = db.get(Company, item.company_id)
     if company is None:
