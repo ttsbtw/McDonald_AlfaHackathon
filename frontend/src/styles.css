@@ -205,6 +205,15 @@ a { color: inherit; }
 .assessment__calculation > b { overflow-wrap: anywhere; font-size: 11px; font-weight: 750; }
 .assessment__calculation > small, .assessment__formula-note { color: var(--muted); font-size: 10px; line-height: 1.45; }
 .assessment__formula-note { display: block; margin-top: 10px; }
+.ai-analysis { display: flex; flex-direction: column; gap: 16px; }
+.ai-analysis--inactive { background: #fbfbfa; }
+.ai-analysis__inactive-note { margin: 0; padding: 12px 14px; border-radius: 10px; background: #f3f3f1; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.ai-analysis__result { display: flex; flex-direction: column; gap: 14px; }
+.ai-analysis__meta, .ai-analysis__result > small { margin: 0; color: var(--muted); font-size: 11px; }
+.ai-analysis__brief { padding: 16px; border-radius: 13px; background: #f5f5f2; }
+.ai-analysis__brief h3 { margin: 0 0 8px; font-size: 14px; }
+.ai-analysis__brief p { margin: 0; font-size: 14px; line-height: 1.55; }
+.ai-analysis__brief--blocked { background: #fff0ed; color: #8f251d; }
 
 .alternatives { display: flex; flex-direction: column; gap: 18px; }
 .alternatives__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }

@@ -7,14 +7,22 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import StaleDataError
 
+from .ai_analysis import (
+    InvalidModelAnswer,
+    OllamaModelMissing,
+    OllamaUnavailable,
+    PROMPT_VERSION,
+    analyze_with_ollama,
+)
 from .alternatives import generate_alternatives
 from .auth import DB, BankEmployee, Client, CurrentUser, create_token, dummy_hash, password_hash
 from .errors import APIError
 from .models import (
+    AIAnalysisRecord,
     AlternativeOffer,
     Application,
     ApplicationEvent,
@@ -29,6 +37,7 @@ from .models import (
 )
 from .pipeline.processing import ProcessingPipeline
 from .schemas import (
+    AIAnalysisOut,
     AlternativeCandidateOut,
     AlternativeDecisionIn,
     AlternativeSetOut,
@@ -408,6 +417,83 @@ def bank_assessments(application_id: UUID, db: DB, user: BankEmployee):
     ).all()
 
 
+@router.get("/bank/applications/{application_id}/ai-analysis", response_model=AIAnalysisOut | None,
+            tags=["Рабочее место сотрудника"])
+def bank_ai_analysis_result(application_id: UUID, db: DB, user: BankEmployee):
+    item = db.get(Application, application_id)
+    if item is None or item.status == "DRAFT":
+        raise APIError(404, "APPLICATION_NOT_FOUND", "Заявка не найдена.")
+    saved = db.get(AIAnalysisRecord, item.id)
+    if saved is None:
+        return None
+    assessment = db.scalar(
+        select(Assessment)
+        .where(Assessment.application_id == item.id)
+        .order_by(Assessment.application_revision.desc())
+        .limit(1)
+    )
+    final_decision = item.status in {"APPROVED", "REJECTED"}
+    if (assessment is None or (not final_decision and assessment.application_revision + 1 != item.revision)
+            or saved.assessment_id != assessment.id
+            or (not final_decision and saved.prompt_version != PROMPT_VERSION)):
+        db.delete(saved)
+        db.commit()
+        return None
+    return AIAnalysisOut.model_validate(saved.response)
+
+
+@router.post("/bank/applications/{application_id}/ai-analysis", response_model=AIAnalysisOut,
+             tags=["Рабочее место сотрудника"], responses={503: {"model": ErrorResponse}})
+def bank_ai_analysis(application_id: UUID, request: Request, db: DB, user: BankEmployee):
+    item = db.get(Application, application_id)
+    if item is None or item.status == "DRAFT":
+        raise APIError(404, "APPLICATION_NOT_FOUND", "Заявка не найдена.")
+    if item.status in {"APPROVED", "REJECTED"}:
+        raise APIError(409, "APPLICATION_FINAL", "Рассмотрение завершено. Новый ИИ-анализ недоступен.")
+    assessment = current_assessment(db, item)
+    company = db.get(Company, item.company_id)
+    if company is None:
+        raise APIError(409, "COMPANY_REQUIRED", "Для заявки не найдены сведения о компании.")
+    product = db.get(CreditProduct, item.product_code)
+    compliance_review = db.scalar(
+        select(ComplianceReview)
+        .where(ComplianceReview.application_id == item.id, ComplianceReview.assessment_id == assessment.id)
+        .order_by(ComplianceReview.created_at.desc(), ComplianceReview.id.desc())
+        .limit(1)
+    )
+    try:
+        result = analyze_with_ollama(item, company, assessment, request.app.state.settings,
+                                     compliance_review, product)
+    except OllamaModelMissing:
+        raise APIError(503, "OLLAMA_MODEL_MISSING",
+                       "Локальная модель Ollama не найдена. Загрузите настроенную модель и повторите анализ.") from None
+    except OllamaUnavailable:
+        raise APIError(503, "OLLAMA_UNAVAILABLE",
+                       "Локальная Ollama недоступна. Запустите её и повторите анализ.") from None
+    except InvalidModelAnswer as exc:
+        raise APIError(503, "AI_ANALYSIS_INVALID_RESPONSE", str(exc)) from None
+    saved = db.get(AIAnalysisRecord, item.id)
+    if saved is None:
+        saved = AIAnalysisRecord(application_id=item.id, assessment_id=assessment.id,
+                                 response=result.model_dump(mode="json"), model=result.model,
+                                 prompt_version=result.prompt_version, analyzed_at=result.analyzed_at)
+        db.add(saved)
+    else:
+        saved.assessment_id = assessment.id
+        saved.response = result.model_dump(mode="json")
+        saved.model = result.model
+        saved.prompt_version = result.prompt_version
+        saved.analyzed_at = result.analyzed_at
+    add_audit(db, item, company, user.id, "AI_SCORING_EXPLANATION", "local_ollama", {
+        "analysis_id": str(result.analysis_id), "application_id": str(item.id),
+        "assessment_id": str(assessment.id), "application_revision": assessment.application_revision,
+        "model": result.model, "prompt_version": result.prompt_version,
+        "analyzed_at": result.analyzed_at.isoformat(), "used_safe_fallback": result.used_safe_fallback,
+    })
+    db.commit()
+    return result
+
+
 @router.get("/bank/applications/{application_id}/audit", tags=["Рабочее место сотрудника"])
 def bank_audit_export(application_id: UUID, db: DB, user: BankEmployee,
                       format: Literal["json", "csv"] = "json"):
@@ -727,6 +813,8 @@ def save_review_action(db, item, employee, assessment, action, message, target_s
         comment=message or "",
         **terms,
     ))
+    if action == "REQUEST_INFO":
+        db.execute(delete(AIAnalysisRecord).where(AIAnalysisRecord.application_id == item.id))
     item.status = target_status
     item.updated_at = utc_now()
     company = db.get(Company, item.company_id)
@@ -855,6 +943,7 @@ def update_draft(application_id: UUID, payload: DraftUpdate, db: DB, user: Clien
     for field, value in changes.items():
         setattr(item, field, value)
     if changes:
+        db.execute(delete(AIAnalysisRecord).where(AIAnalysisRecord.application_id == item.id))
         item.updated_at = utc_now()
     try:
         if changes:
@@ -922,6 +1011,7 @@ def submit_application(application_id: UUID, db: DB, user: Client, payload: Subm
         result=to_json_value(result),
     )
     db.add(assessment)
+    db.execute(delete(AIAnalysisRecord).where(AIAnalysisRecord.application_id == item.id))
     add_audit(db, item, company, user.id, "BKI_CHECK", bki["source"], bki)
     add_audit(db, item, company, user.id, "COMPLIANCE_CHECK", compliance["source"], compliance)
     add_audit(db, item, company, user.id, "UNDERWRITING_EVALUATED", "underwriting_rules", underwriting)

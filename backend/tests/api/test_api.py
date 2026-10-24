@@ -289,7 +289,7 @@ def test_migration_matches_models_and_roundtrip(database_url):
     command.upgrade(config, "head")
     command.upgrade(config, "head")
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0007_alternative_offers"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0008_ai_analysis_records"
     engine.dispose()
 
 
@@ -328,7 +328,6 @@ def test_submit_persists_explained_assessment_for_selected_product(client, appli
     assert [item["source"] for item in assessment["input_snapshot"]["checks"]] == [
         "company_registry", "credit_history",
     ]
-
     audit = client.get(f"/api/v1/bank/applications/{draft['id']}/audit", headers=employee_headers)
     assert audit.status_code == 200
     assert {row["event_type"] for row in audit.json()["records"]} >= {
@@ -336,14 +335,86 @@ def test_submit_persists_explained_assessment_for_selected_product(client, appli
     }
     csv_export = client.get(f"/api/v1/bank/applications/{draft['id']}/audit?format=csv", headers=employee_headers)
     assert csv_export.status_code == 200 and "event_type,source" in csv_export.text
-
-    # A retry after a successful submit must not create a second assessment.
     retried = client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers,
                           json={"credit_history_consent": True})
     assert retried.status_code == 200
     assert client.get(f"/api/v1/bank/applications/{draft['id']}/assessments",
                       headers=employee_headers).json() == assessments.json()
 
+
+def test_employee_ai_analysis_is_explanatory_and_audited(client, application, headers, monkeypatch):
+    from app.ai_analysis import AIAnalysisOut, AIEvidence, AIRecommendation, PROMPT_VERSION
+
+    draft = create(client, headers, {
+        "product_code": "working_capital", "requested_amount": "300000.00", "term_months": 12,
+        "purpose": "Закупка материалов", "average_monthly_revenue": "1000000.00",
+        "average_monthly_operating_expenses": "600000.00", "existing_monthly_debt_payment": "50000.00",
+    })
+    assert client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers,
+                       json={"credit_history_consent": True}).status_code == 200
+    employee_headers = auth_headers(client, "employee", EMPLOYEE_PASSWORD)
+    response_payload = AIAnalysisOut(
+        analysis_id=UUID(int=45), application_id=UUID(draft["id"]),
+        analyzed_at=datetime.now(timezone.utc), model="qwen3:4b-instruct-2507-q4_K_M",
+        prompt_version=PROMPT_VERSION, summary="Балл скоринга высокий.",
+        summary_fact_ids=["score.score"], evidence=[AIEvidence(id="score.score", label="Балл", value="100")],
+        recommendations=[AIRecommendation(action="CONTINUE_REVIEW", text="Продолжить рассмотрение.", fact_ids=["score.score"])],
+        data_warnings=[], blocking_reasons=[], is_blocked=False, used_safe_fallback=False,
+    )
+    calls = []
+    monkeypatch.setattr("app.api.analyze_with_ollama", lambda item, company, assessment, settings, compliance_review=None, product=None: calls.append(str(item.id)) or response_payload)
+    response = client.post(f"/api/v1/bank/applications/{draft['id']}/ai-analysis", headers=employee_headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["application_id"] == draft["id"]
+    assert response.json()["evidence"][0]["id"] == "score.score"
+    assert calls == [draft["id"]]
+    persisted = client.get(f"/api/v1/bank/applications/{draft['id']}/ai-analysis", headers=employee_headers)
+    assert persisted.status_code == 200
+    assert persisted.json() == response.json()
+    assert client.post(f"/api/v1/bank/applications/{draft['id']}/ai-analysis", headers=headers).status_code == 403
+    queue_item = client.get(f"/api/v1/bank/applications/{draft['id']}", headers=employee_headers).json()
+    assert queue_item["status"] == "UNDER_REVIEW"
+    assert queue_item["score"] == 100
+    with application.state.session_factory() as session:
+        log = session.scalar(select(AuditLog).where(AuditLog.event_type == "AI_SCORING_EXPLANATION"))
+        assert log.application_id == UUID(draft["id"])
+        assert log.payload["model"] == "qwen3:4b-instruct-2507-q4_K_M"
+        assert log.payload["prompt_version"] == PROMPT_VERSION
+        assert "reasoning" not in json.dumps(log.payload).lower()
+
+    requested = client.post(f"/api/v1/bank/applications/{draft['id']}/request-info", headers=employee_headers,
+                            json={"comment": "Уточните финансовые показатели."})
+    assert requested.status_code == 200
+    assert client.get(f"/api/v1/bank/applications/{draft['id']}/ai-analysis",
+                      headers=employee_headers).json() is None
+    updated = client.patch(f"/api/v1/applications/{draft['id']}", headers=headers, json={
+        "revision": requested.json()["revision"], "average_monthly_revenue": "1200000.00",
+    })
+    assert updated.status_code == 200
+    assert client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers,
+                       json={"credit_history_consent": True}).status_code == 200
+    assert client.get(f"/api/v1/bank/applications/{draft['id']}/ai-analysis",
+                      headers=employee_headers).json() is None
+
+    refreshed_analysis = client.post(
+        f"/api/v1/bank/applications/{draft['id']}/ai-analysis", headers=employee_headers,
+    )
+    assert refreshed_analysis.status_code == 200, refreshed_analysis.text
+    approved = client.post(
+        f"/api/v1/bank/applications/{draft['id']}/decision", headers=employee_headers,
+        json={"decision": "APPROVED"},
+    )
+    assert approved.status_code == 200 and approved.json()["status"] == "APPROVED"
+    final_analysis = client.get(
+        f"/api/v1/bank/applications/{draft['id']}/ai-analysis", headers=employee_headers,
+    )
+    assert final_analysis.status_code == 200
+    assert final_analysis.json()["summary"] == refreshed_analysis.json()["summary"]
+    retry = client.post(
+        f"/api/v1/bank/applications/{draft['id']}/ai-analysis", headers=employee_headers,
+    )
+    assert retry.status_code == 409
+    assert retry.json()["error"]["code"] == "APPLICATION_FINAL"
 
 @pytest.mark.parametrize(("expenses", "existing_debt", "expected_score", "recommendation"), [
     ("600000.00", "50000.00", 100, "APPROVE"),

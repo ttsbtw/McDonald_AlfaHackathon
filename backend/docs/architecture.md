@@ -8,6 +8,8 @@ flowchart LR
     Pipeline --> Checks[app.checks: синтетические BKI и Compliance]
     Pipeline --> Scoring[app.scoring: риск-оценка]
     Pipeline --> UW[app.underwriting: внутренние правила]
+    API --> AI[app.ai_analysis: пояснение по запросу сотрудника]
+    AI -. локальный необязательный вызов .-> Ollama[Ollama на хосте]
     API --> Alternatives[app.alternatives: подбор условий]
     Alternatives --> Scoring[app.scoring: повторная оценка]
     Alternatives --> UW
@@ -31,11 +33,13 @@ erDiagram
     APPLICATIONS ||--o{ ASSESSMENTS : assessed_as
     APPLICATIONS ||--o{ APPLICATION_EVENTS : records
     APPLICATIONS ||--o{ AUDIT_LOGS : records
+    APPLICATIONS ||--o| AI_ANALYSIS_RECORDS : caches_latest
     APPLICATIONS ||--o{ COMPLIANCE_REVIEWS : screened
     APPLICATIONS ||--o{ REVIEW_ACTIONS : reviewed_by
     APPLICATIONS ||--o{ ALTERNATIVE_OFFERS : proposes
     ASSESSMENTS ||--o{ REVIEW_ACTIONS : used_for
     ASSESSMENTS ||--o{ ALTERNATIVE_OFFERS : evaluated_for
+    ASSESSMENTS ||--o| AI_ANALYSIS_RECORDS : explained_by
     USERS ||--o{ REVIEW_ACTIONS : decides
     USERS ||--o{ ALTERNATIVE_OFFERS : generates
     USERS ||--o{ APPLICATION_EVENTS : acts
@@ -88,6 +92,14 @@ erDiagram
         jsonb input_snapshot
         jsonb result
         timestamptz created_at
+    }
+    AI_ANALYSIS_RECORDS {
+        uuid application_id PK, FK
+        uuid assessment_id FK
+        jsonb response
+        string model
+        string prompt_version
+        timestamptz analyzed_at
     }
     APPLICATION_EVENTS {
         uuid id PK
@@ -159,12 +171,25 @@ erDiagram
 Составной внешний ключ `(company_id, owner_id)` дополнительно запрещает связать
 заявку с компанией другого пользователя даже при ошибке прикладного кода.
 Деньги хранятся в NUMERIC(15, 2), даты событий — TIMESTAMPTZ; API нормализует UTC.
-JSONB используется только для серверных условий скоринга, не вместо колонок анкеты.
+JSONB используется для серверных условий скоринга, снимков и результатов оценок,
+проверенных ответов локальной модели и полезной нагрузки аудита; поля анкеты
+остаются отдельными колонками.
 
 Кредитный конвейер вызывает `checks.bki`, `checks.compliance`, затем
 `scoring.assess_application` и `underwriting.evaluate_underwriting`. Он хранит
 результат каждой проверки в `audit_logs`, а скоринговый снимок и объяснения — в
 `assessments`. Экспорт аудита сотруднику доступен как JSON и CSV.
+
+Пояснение скоринга запускается отдельно сотрудником для текущей оценки через
+`app.ai_analysis`. API передаёт Ollama только контекст выбранной заявки,
+проверяет ответ по схеме и разрешённым фактам, затем сохраняет последний
+проверенный результат в `ai_analysis_records` и метаданные запуска в `audit_logs`.
+Модель и версия промпта записываются вместе со временем анализа; внутренние
+рассуждения модели не сохраняются. Ollama работает отдельно от Docker backend и
+не участвует в расчёте баллов, обязательных проверках, статусах или решениях.
+Если локальная модель недоступна, запрос пояснения завершается понятной ошибкой,
+но обычная обработка заявок продолжает работать. Настройка описана в корневом
+[README](../../README.md) и [инструкции Ollama](../../ai-docs/ollama-ai-analysis.md).
 
 Модуль `app.alternatives` рассматривает только изменения суммы и срока. Он
 использует аннуитетную формулу скоркарда, повторно рассчитывает скоринг и

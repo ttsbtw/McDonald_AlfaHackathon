@@ -5,7 +5,7 @@ import { Alert, Button, EmptyState, Field, Skeleton, StatusBadge, Toast } from "
 import { approvalBlockReason, latestComplianceReview, requiresComplianceReview } from "../domain/pipeline.js";
 
 const filters = ["", "UNDER_REVIEW", "NEEDS_INFO", "APPROVED", "REJECTED"];
-const recommendationLabels = { APPROVE: "Рекомендуется одобрить", REVIEW: "Нужно дополнительное рассмотрение", DECLINE: "Рекомендуется отказ", REQUEST_INFO: "Нужно запросить сведения" };
+const recommendationLabels = { APPROVE: "Положительная рекомендация скоринга", REVIEW: "Нужно дополнительное рассмотрение", DECLINE: "Отрицательная рекомендация скоринга", REQUEST_INFO: "Нужно запросить сведения" };
 const riskLabels = { LOW: "Низкий", MEDIUM: "Средний", HIGH: "Высокий", UNKNOWN: "Не определён" };
 const assessmentStatuses = { COMPLETED: "Оценка завершена", INSUFFICIENT_DATA: "Недостаточно данных" };
 const underwritingLabels = { PASS: "Проверки пройдены", REVIEW: "Нужна ручная проверка", REJECT: "Есть стоп-фактор" };
@@ -18,8 +18,8 @@ const checkStatuses = { PASS: "Пройдена", FAIL: "Не пройдена",
 const checkReasonLabels = { SYNTHETIC_COMPANY_MATCH: "Данные компании совпали с демо-реестром", NO_DEMO_DELINQUENCIES: "В демо-истории просрочек нет", POSITIVE_HISTORY: "Положительная кредитная история", MINOR_DELAY_HISTORY: "Были отдельные задержки платежей до 7 дней", NO_CREDIT_HISTORY: "Кредитная история отсутствует", AVAILABLE: "Данные доступны", ACTIVE: "Компания действует", INACTIVE: "Компания не действует", UNAVAILABLE: "Данные временно недоступны", TIMEOUT: "Источник не ответил вовремя", CONSENT_REQUIRED: "Клиент не дал согласие на запрос кредитной истории", PROVIDER_UNAVAILABLE: "Источник временно недоступен", SYNTHETIC_PROVIDER_ERROR: "Техническая ошибка демо-источника", UNSUPPORTED_SUBJECT_TYPE: "Тип клиента не поддерживается проверкой" };
 const reasonCodeLabels = { AMOUNT_OUT_OF_RANGE: "Сумма не входит в условия продукта.", TERM_OUT_OF_RANGE: "Срок не входит в условия продукта.", BUSINESS_TOO_YOUNG: "Бизнес работает меньше требуемого срока.", NON_POSITIVE_OPERATING_PROFIT: "Доход после расходов не позволяет обслуживать кредит.", EXCESSIVE_DEBT_BURDEN: "Долговая нагрузка превышает лимит продукта.", CURRENT_OVERDUE: "Есть текущая просроченная задолженность.", SEVERE_OVERDUE_HISTORY: "Срок прошлых просрочек превышает лимит продукта.", CHECKS_INCOMPLETE: "Не все обязательные проверки завершены.", SCORE_SUFFICIENT: "Балл достаточен для рассмотрения заявки.", MANUAL_REVIEW: "Требуется дополнительная оценка сотрудником.", LOW_SCORE: "Балл ниже минимального порога продукта." };
 const underwritingRuleLabels = { SYNTHETIC_INTERNAL_BLACKLIST: "Внутренний стоп-фактор", SYNTHETIC_INTERNAL_WHITELIST: "Внутренний белый список", MIN_BUSINESS_AGE: "Возраст бизнеса", PRODUCT_AMOUNT_LIMIT: "Лимит продукта", DEBT_BURDEN: "Долговая нагрузка", BKI_AVAILABILITY: "Доступность БКИ", BKI_HISTORY: "Кредитная история", CURRENT_OVERDUE: "Текущая просрочка", COMPLIANCE_CLEAR: "Комплаенс-проверка", COMPLIANCE_POTENTIAL_MATCH: "Возможное совпадение в комплаенс-проверке", COMPLIANCE_CONFIRMED_MATCH: "Подтверждённое совпадение в комплаенс-проверке", COMPLIANCE_ERROR: "Ошибка комплаенс-проверки" };
-const auditLabels = { APPLICATION_CREATED: "Заявка создана", BKI_CHECK: "Проверка БКИ", COMPLIANCE_CHECK: "Комплаенс-проверка", UNDERWRITING_EVALUATED: "Правила кредитования проверены", SCORING_COMPLETED: "Скоринг завершён", APPLICATION_SUBMITTED: "Заявка отправлена", APPLICATION_UPDATED: "Анкета обновлена", COMPLIANCE_REVIEW: "Ручной разбор комплаенс-проверки", REVIEW_ACTION: "Решение сотрудника", ALTERNATIVES_GENERATED: "Рассчитаны альтернативы", ALTERNATIVE_OFFERED: "Альтернатива предложена", ALTERNATIVE_ACCEPTED: "Клиент принял альтернативу", ALTERNATIVE_DECLINED: "Клиент отклонил альтернативу", ALTERNATIVE_SUPERSEDED: "Альтернатива закрыта", PIPELINE_ERROR: "Техническая ошибка конвейера" };
-const auditSourceLabels = { applications: "Заявка", synthetic_bki: "Демо-БКИ", synthetic_bki_fixture: "Демо-БКИ", synthetic_compliance: "Демо-реестр", synthetic_compliance_fixture: "Демо-реестр", underwriting_rules: "Правила кредитования", scoring: "Скоринг", employee_compliance: "Сотрудник банка", employee_review: "Сотрудник банка", client_alternatives: "Клиент", alternative_engine: "Подбор условий" };
+const auditLabels = { APPLICATION_CREATED: "Заявка создана", BKI_CHECK: "Проверка БКИ", COMPLIANCE_CHECK: "Комплаенс-проверка", UNDERWRITING_EVALUATED: "Правила кредитования проверены", SCORING_COMPLETED: "Скоринг завершён", APPLICATION_SUBMITTED: "Заявка отправлена", APPLICATION_UPDATED: "Анкета обновлена", AI_SCORING_EXPLANATION: "ИИ-анализ скоринга", COMPLIANCE_REVIEW: "Ручной разбор комплаенс-проверки", REVIEW_ACTION: "Решение сотрудника", ALTERNATIVES_GENERATED: "Рассчитаны альтернативы", ALTERNATIVE_OFFERED: "Альтернатива предложена", ALTERNATIVE_ACCEPTED: "Клиент принял альтернативу", ALTERNATIVE_DECLINED: "Клиент отклонил альтернативу", ALTERNATIVE_SUPERSEDED: "Альтернатива закрыта", PIPELINE_ERROR: "Техническая ошибка конвейера" };
+const auditSourceLabels = { applications: "Заявка", synthetic_bki: "Демо-БКИ", synthetic_bki_fixture: "Демо-БКИ", synthetic_compliance: "Демо-реестр", synthetic_compliance_fixture: "Демо-реестр", underwriting_rules: "Правила кредитования", scoring: "Скоринг", local_ollama: "Локальная Ollama", employee_compliance: "Сотрудник банка", employee_review: "Сотрудник банка", client_alternatives: "Клиент", alternative_engine: "Подбор условий" };
 const alternativeStatusLabels = { GENERATED: "Рассчитан", OFFERED: "Ожидает ответа", ACCEPTED: "Клиент принял", DECLINED: "Клиент отказался", SUPERSEDED: "Закрыт после решения" };
 
 function hasChangedApprovedTerms(item) {
@@ -138,6 +138,9 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
   const [comment, setComment] = useState("");
   const [actionMode, setActionMode] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [aiAnalysis, setAiAnalysis] = useState(null);
+  const [aiAnalysisError, setAiAnalysisError] = useState("");
+  const [aiAnalysisBusy, setAiAnalysisBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
   const dismissToast = useCallback(() => setToast(null), []);
@@ -145,8 +148,11 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
     if (unavailable) return;
     if (!silent) { setLoading(true); setError(""); }
     try {
-      const [application, assessments, alternativeSet, auditLog] = await Promise.all([api.bankApplication(id), api.bankAssessments(id), api.bankAlternatives(id), api.bankAudit(id)]);
-      setRecord({ ...application, assessments }); setAlternatives(alternativeSet); setAudit(auditLog); setError("");
+      const [application, assessments, alternativeSet, auditLog, savedAiAnalysis] = await Promise.all([
+        api.bankApplication(id), api.bankAssessments(id), api.bankAlternatives(id), api.bankAudit(id), api.bankAIAnalysis(id),
+      ]);
+      setRecord({ ...application, assessments }); setAlternatives(alternativeSet); setAudit(auditLog);
+      setAiAnalysis(savedAiAnalysis); setError("");
     } catch (err) { setError(err.message); }
     finally { if (!silent) setLoading(false); }
   }
@@ -161,7 +167,10 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
     } catch (err) { setHistoryError(err.message); }
     finally { setHistoryLoading(false); setHistoryMoreLoading(false); }
   }
-  useEffect(() => { loadRecord(); }, [id, unavailable]);
+  useEffect(() => {
+    setAiAnalysis(null); setAiAnalysisError("");
+    loadRecord();
+  }, [id, unavailable]);
   useEffect(() => {
     if (record?.company?.id) loadHistory(record.company.id);
   }, [record?.company?.id, record?.status]);
@@ -198,15 +207,29 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
     finally { setBusy(false); }
   }
   async function sendAlternative(offerId) { setBusy(true); setError(""); try { await api.offerAlternative(id, offerId); await loadRecord(true); setToast({ id: Date.now(), message: "Альтернативные условия отправлены клиенту" }); } catch (err) { setError(err.message); } finally { setBusy(false); } }
+  async function analyzeScoring() {
+    if (aiAnalysisBusy || finalDecision) return;
+    setAiAnalysisBusy(true); setAiAnalysisError(""); setAiAnalysis(null);
+    try {
+      setAiAnalysis(await api.analyzeBankScoring(id));
+      setToast({ id: Date.now(), message: "ИИ-анализ заявки готов", position: "center" });
+    }
+    catch (err) { setAiAnalysisError(err.message || "Не удалось выполнить анализ. Повторите попытку."); }
+    finally { setAiAnalysisBusy(false); }
+  }
   async function action(type) {
     const message = comment.trim();
     if (type === "info" && !message) { setError("Напишите, какие сведения нужно предоставить."); return; }
     if (type === "approve" && approvalReason) { setError(approvalReason); return; }
     setBusy(true); setError("");
     try {
-      if (type === "info") await api.requestInfo(id, { comment: message });
+      if (type === "info") {
+        await api.requestInfo(id, { comment: message });
+        setAiAnalysis(null);
+      }
       else {
         await api.decide(id, { decision: type === "approve" ? "APPROVED" : "REJECTED", ...(message ? { comment: message } : {}) });
+        setAiAnalysisError("");
         setToast({ id: Date.now(), message: type === "approve" ? "Заявка одобрена" : "Заявка отклонена" });
       }
       setActionMode(null); setComment(""); await loadRecord(true);
@@ -232,12 +255,13 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
     />
     <ChecksPanel assessment={assessment} />
     <AssessmentSummary assessment={assessment} />
+    <AIAnalysisPanel result={aiAnalysis} loading={aiAnalysisBusy} error={aiAnalysisError} onAnalyze={analyzeScoring} hasAssessment={Boolean(assessment)} inactive={finalDecision} />
     {requiresComplianceReview(assessment) && <ComplianceReviewPanel application={record} review={complianceReview} busy={busy} onSaved={() => loadRecord(true)} setBusy={setBusy} setError={setError} />}
     <AlternativePanel application={record} alternativeSet={alternatives} busy={busy} onGenerate={generateAlternatives} onOffer={sendAlternative} />
     <AuditPanel id={id} audit={audit} onError={setError} />
   </main><aside className="panel sticky-card decision-card"><span className="eyebrow">Итоговое решение</span><h3>{reviewOpen ? "Следующее действие" : finalDecision ? "Рассмотрение завершено" : "Ожидаем клиента"}</h3>
     {!reviewOpen ? <><StatusBadge status={record.status} /><p className="muted">{finalDecision ? "Итог зафиксирован. Действия по заявке завершены." : "Банк запросил сведения. Действия снова станут доступны после ответа клиента."}</p></> : actionMode ? <><Field label={actionMode === "info" ? "Какие сведения нужно предоставить клиенту?" : "Комментарий к отказу — необязательно"}><textarea rows="5" maxLength="1000" value={comment} onChange={(event) => setComment(event.target.value)} autoFocus /></Field><Button busy={busy} onClick={() => action(actionMode)}>{actionMode === "info" ? "Отправить запрос" : "Подтвердить отказ"}</Button><Button disabled={busy} variant="ghost" onClick={() => { setActionMode(null); setComment(""); setError(""); }}>Отмена</Button></> : <><Button busy={busy} disabled={Boolean(approvalReason)} onClick={() => action("approve")}>Одобрить</Button>{approvalReason && <p className="decision-card__reason">{approvalReason}</p>}<Button busy={busy} variant="secondary" onClick={() => { setComment(""); setActionMode("info"); }}>Запросить сведения</Button><Button busy={busy} variant="ghost" onClick={() => { setComment(""); setActionMode("reject"); }}>Отказать</Button></>}
-  </aside></div>{toast && <Toast key={toast.id} message={toast.message} onClose={dismissToast} />}</div>;
+  </aside></div>{toast && <Toast key={toast.id} message={toast.message} position={toast.position || "right"} onClose={dismissToast} />}</div>;
 }
 
 function CompanyHistoryPanel({ items, total, loading, moreLoading, error, currentApplicationId, onOpen, onRetry, onLoadMore }) {
@@ -274,7 +298,7 @@ function ChecksPanel({ assessment }) {
   const compliance = result.check_reports?.compliance;
   const underwriting = result.underwriting || {};
   return <CollapsiblePanel className="checks-panel" eyebrow="Обязательные проверки" title="БКИ, комплаенс и правила кредитования" summary={<span className={`result-pill result-pill--${String(underwriting.status || "unknown").toLowerCase()}`}>{underwritingLabels[underwriting.status] || "Нет результата"}</span>}><div className="check-report-grid">
-    <article><div><span>БКИ</span><b className={`result-text result-text--${reportTone(bki?.status)}`}>{reportStatusLabels[bki?.status] || "Нет результата"}</b></div><dl><div><dt>Согласие</dt><dd>{bki?.consent_confirmed ? "Получено" : "Не получено"}</dd></div><div><dt>Текущая просрочка</dt><dd>{formatMoneyRub(bki?.current_overdue_amount || 0)}</dd></div><div><dt>Макс. просрочка</dt><dd>{bki?.max_overdue_days_12m === null || bki?.max_overdue_days_12m === undefined ? "—" : `${bki.max_overdue_days_12m} дн.`}</dd></div></dl><p>{["ERROR", "UNAVAILABLE"].includes(bki?.status) ? "Техническая недоступность требует ручной проверки и не считается отказом." : checkReasonLabels[bki?.reason_code] || "Синтетический отчёт кредитной истории."}</p></article>
+    <article><div><span>БКИ</span><b className={`result-text result-text--${reportTone(bki?.status)}`}>{reportStatusLabels[bki?.status] || "Нет результата"}</b></div><dl><div><dt>Согласие</dt><dd>{bki?.consent_confirmed ? "Получено" : "Не получено"}</dd></div><div><dt>Ежемесячный платёж по данным БКИ</dt><dd>{bki?.monthly_payment === null || bki?.monthly_payment === undefined ? "—" : `${formatMoneyRub(bki.monthly_payment)}/мес.`}</dd></div><div><dt>Текущая просрочка</dt><dd>{formatMoneyRub(bki?.current_overdue_amount || 0)}</dd></div><div><dt>Макс. просрочка</dt><dd>{bki?.max_overdue_days_12m === null || bki?.max_overdue_days_12m === undefined ? "—" : `${bki.max_overdue_days_12m} дн.`}</dd></div></dl><p>{["ERROR", "UNAVAILABLE"].includes(bki?.status) ? "Техническая недоступность требует ручной проверки и не считается отказом." : checkReasonLabels[bki?.reason_code] || "Синтетический отчёт кредитной истории."}</p></article>
     <article><div><span>Комплаенс</span><b className={`result-text result-text--${reportTone(compliance?.status)}`}>{reportStatusLabels[compliance?.status] || "Нет результата"}</b></div><dl><div><dt>Ручной разбор</dt><dd>{compliance?.requires_manual_review || compliance?.status === "ERROR" ? "Требуется" : "Не требуется"}</dd></div><div><dt>Источник</dt><dd>Синтетический реестр</dd></div></dl><p>{compliance?.explanation || (compliance?.status === "ERROR" ? "Техническая ошибка требует ручного разбора и не означает отказ." : "Совпадений в демо-реестре нет.")}</p></article>
   </div><div className="underwriting-rules"><h3>Правила кредитования</h3>{underwriting.rules?.length ? underwriting.rules.map((rule) => <div key={rule.code}><span className={`rule-outcome rule-outcome--${String(rule.outcome).toLowerCase()}`}>{outcomeLabels[rule.outcome] || "Результат"}</span><div><strong>{underwritingRuleLabels[rule.code] || "Дополнительная проверка"}</strong><p>{rule.explanation || "Результат правила сохранён в оценке."}</p></div></div>) : <p className="muted">Правила не рассчитаны.</p>}</div></CollapsiblePanel>;
 }
@@ -337,6 +361,42 @@ function AcceptedAlternativeReview({ application, offer, originalAssessment }) {
   const original = originalAssessment?.result || {}; const rescored = offer.evaluation?.scoring || {};
   const isFinal = ["APPROVED", "REJECTED"].includes(application.status);
   return <section className="accepted-review"><div className="accepted-review__heading"><span className="eyebrow eyebrow--red">Клиент принял предложение</span><h2>{isFinal ? "Условия, рассмотренные банком" : "Новые условия для итогового решения"}</h2></div><div className="accepted-review__comparison"><div className="accepted-review__side accepted-review__side--original"><small>Исходная заявка</small><strong><s>{formatMoneyRub(application.requested_amount)}</s></strong><span><s>{application.term_months} мес.</s></span><dl><div><dt>Платёж</dt><dd><s>{formatMoneyRub(original.features?.new_monthly_payment)}</s></dd></div><div><dt>Балл</dt><dd><s>{original.score ?? "—"} / 100</s></dd></div></dl></div><span className="accepted-review__arrow">→</span><div className="accepted-review__side accepted-review__side--accepted"><small>Принятый вариант</small><strong>{formatMoneyRub(offer.amount)}</strong><span>{offer.term_months} мес.</span><dl><div><dt>Платёж</dt><dd>{formatMoneyRub(offer.monthly_payment)}</dd></div><div><dt>Балл</dt><dd>{rescored.score ?? "—"} / 100</dd></div></dl></div></div></section>;
+}
+
+function AIAnalysisPanel({ result, loading, error, onAnalyze, hasAssessment, inactive }) {
+  const mandatoryBlock = (result?.blocking_reasons || []).some((reason) => !reason.startsWith("Оценка неполная:"));
+  return <section className={`panel ai-analysis${inactive ? " ai-analysis--inactive" : ""}`}>
+    <div className="panel-title"><div><span className="eyebrow eyebrow--red">Локальная Ollama</span><h2>Пояснение скоринга с помощью ИИ</h2><p>Анализ опирается на текущую оценку и не меняет баллы, проверки, статус или решение сотрудника.</p></div></div>
+    {inactive && <p className="ai-analysis__inactive-note">{result ? "Рассмотрение завершено. Сохранённый анализ доступен только для просмотра; повторный анализ отключён." : "Рассмотрение завершено. Новый ИИ-анализ недоступен."}</p>}
+    <Button variant="secondary" busy={loading} disabled={inactive || !hasAssessment || loading || Boolean(result)} onClick={onAnalyze}>
+      {inactive ? "Заявка закрыта — анализ недоступен" : loading ? "Анализируем заявку…" : result ? "Анализ уже выполнен" : "Проанализировать скоринг с помощью ИИ"}
+    </Button>
+    {error && !inactive && <><Alert type="error" title="Не удалось выполнить анализ">{error}</Alert><Button variant="ghost" disabled={loading} onClick={onAnalyze}>Повторить анализ</Button></>}
+    {loading && !inactive && <p role="status" className="muted">Ожидаем ответ локальной модели. Повторный запуск заблокирован до завершения запроса.</p>}
+    {result && <div className="ai-analysis__result">
+      <p className="ai-analysis__meta">Последний анализ: {new Date(result.analyzed_at).toLocaleString("ru-RU")}</p>
+      <div className={`ai-analysis__brief${mandatoryBlock ? " ai-analysis__brief--blocked" : ""}`}>
+        <h3>{mandatoryBlock ? "Обязательное ограничение" : "Кратко о заявке"}</h3>
+        <p>{localizeAiText(result.summary)}</p>
+      </div>
+    </div>}
+    {!hasAssessment && <p className="muted">Для анализа нужна сохранённая оценка заявки.</p>}
+  </section>;
+}
+
+const aiFactLabels = {
+  LOW: "низкий", MEDIUM: "средний", HIGH: "высокий", UNKNOWN: "не определён",
+  APPROVE: "положительная рекомендация скоринга, не итоговое решение", REVIEW: "нужно дополнительное рассмотрение",
+  DECLINE: "отрицательная рекомендация скоринга, не итоговое решение", REQUEST_INFO: "нужно запросить сведения",
+  PASS: "пройдена", FAIL: "не пройдена", CLEAR: "совпадений нет", AVAILABLE: "данные получены",
+  NO_HISTORY: "кредитной истории нет", UNAVAILABLE: "источник недоступен", ERROR: "техническая ошибка источника",
+  POTENTIAL_MATCH: "возможное совпадение", CONFIRMED_MATCH: "совпадение подтверждено",
+  COMPLETED: "оценка завершена", INSUFFICIENT_DATA: "недостаточно данных",
+};
+function localizeAiText(text) {
+  const translations = { ...aiFactLabels, ...reasonCodeLabels };
+  const tokens = Object.keys(translations).sort((left, right) => right.length - left.length).join("|");
+  return text.replace(new RegExp(`\\b(${tokens})\\b`, "g"), (token) => translations[token] || token);
 }
 
 function AssessmentSummary({ assessment }) {

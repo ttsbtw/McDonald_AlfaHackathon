@@ -1,0 +1,13 @@
+{
+  "model": "Qwen3-4B-Instruct-2507",
+  "ollama_tag": "qwen3:4b-instruct-2507-q4_K_M",
+  "ollama_alias": "qwen3:4b-instruct",
+  "ollama_digest": "0edcdef34593",
+  "quantization": "Q4_K_M",
+  "format": "GGUF",
+  "size_bytes": 2497280480,
+  "sha256": "85e4a5b7b8ef0e48af0e8658f5aaab9c2324c76c1641493f4d1e25fce54b18b9",
+  "source": "https://ollama.com/library/qwen3:4b-instruct",
+  "upstream_model": "https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507",
+  "license": "Apache-2.0"
+}

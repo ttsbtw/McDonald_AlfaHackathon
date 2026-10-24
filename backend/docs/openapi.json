@@ -1511,6 +1511,208 @@
         }
       }
     },
+    "/api/v1/bank/applications/{application_id}/ai-analysis": {
+      "get": {
+        "tags": [
+          "Рабочее место сотрудника"
+        ],
+        "summary": "Bank Ai Analysis Result",
+        "operationId": "bank_ai_analysis_result_api_v1_bank_applications__application_id__ai_analysis_get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Application Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AIAnalysisOut"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Bank Ai Analysis Result Api V1 Bank Applications  Application Id  Ai Analysis Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Рабочее место сотрудника"
+        ],
+        "summary": "Bank Ai Analysis",
+        "operationId": "bank_ai_analysis_api_v1_bank_applications__application_id__ai_analysis_post",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Application Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AIAnalysisOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/bank/applications/{application_id}/audit": {
       "get": {
         "tags": [
@@ -2622,6 +2824,188 @@
   },
   "components": {
     "schemas": {
+      "AIAnalysisOut": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Analysis Id"
+          },
+          "application_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Application Id"
+          },
+          "analyzed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Analyzed At"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "prompt_version": {
+            "type": "string",
+            "title": "Prompt Version"
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 800,
+            "minLength": 1,
+            "title": "Summary"
+          },
+          "summary_fact_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Summary Fact Ids"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/AIEvidenceOut"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "recommendations": {
+            "items": {
+              "$ref": "#/components/schemas/AIRecommendationOut"
+            },
+            "type": "array",
+            "title": "Recommendations"
+          },
+          "data_warnings": {
+            "items": {
+              "$ref": "#/components/schemas/AIDataWarningOut"
+            },
+            "type": "array",
+            "title": "Data Warnings"
+          },
+          "blocking_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blocking Reasons"
+          },
+          "is_blocked": {
+            "type": "boolean",
+            "title": "Is Blocked"
+          },
+          "used_safe_fallback": {
+            "type": "boolean",
+            "title": "Used Safe Fallback"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "application_id",
+          "analyzed_at",
+          "model",
+          "prompt_version",
+          "summary",
+          "summary_fact_ids",
+          "evidence",
+          "recommendations",
+          "data_warnings",
+          "blocking_reasons",
+          "is_blocked",
+          "used_safe_fallback"
+        ],
+        "title": "AIAnalysisOut"
+      },
+      "AIDataWarningOut": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 400,
+            "minLength": 1,
+            "title": "Text"
+          },
+          "fact_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 6,
+            "title": "Fact Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text",
+          "fact_ids"
+        ],
+        "title": "AIDataWarningOut"
+      },
+      "AIEvidenceOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "value": {
+            "type": "string",
+            "title": "Value"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "value"
+        ],
+        "title": "AIEvidenceOut"
+      },
+      "AIRecommendationOut": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "REVIEW_REQUIRED",
+              "VERIFY_DATA",
+              "REQUEST_INFORMATION",
+              "CONTINUE_REVIEW"
+            ],
+            "title": "Action"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Text"
+          },
+          "fact_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 6,
+            "minItems": 1,
+            "title": "Fact Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action",
+          "text",
+          "fact_ids"
+        ],
+        "title": "AIRecommendationOut"
+      },
       "AlternativeCandidateOut": {
         "properties": {
           "id": {
@@ -3189,6 +3573,11 @@
               }
             ],
             "title": "Approved Annual Interest Rate"
+          },
+          "has_pending_alternative_offer": {
+            "type": "boolean",
+            "title": "Has Pending Alternative Offer",
+            "default": false
           },
           "client": {
             "$ref": "#/components/schemas/UserOut"
@@ -3857,6 +4246,11 @@
               }
             ],
             "title": "Approved Annual Interest Rate"
+          },
+          "has_pending_alternative_offer": {
+            "type": "boolean",
+            "title": "Has Pending Alternative Offer",
+            "default": false
           }
         },
         "additionalProperties": false,

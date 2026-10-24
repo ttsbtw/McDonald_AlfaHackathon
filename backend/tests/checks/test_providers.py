@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from app.checks import MockBKIProvider, MockComplianceProvider
+from app.checks.bki import bki_scoring_values
 from app.underwriting import evaluate_underwriting
 
 NOW = datetime(2026, 10, 23, tzinfo=timezone.utc)
@@ -23,6 +25,22 @@ def test_bki_synthetic_history_scenarios_and_consent():
     assert no_consent["reason_code"] == "CONSENT_REQUIRED"
     assert positive["consent_confirmed"] is True and no_consent["consent_confirmed"] is False
     assert positive["application_id"] == "app-1" and positive["checked_at"] == NOW.isoformat()
+
+
+def test_bki_payment_verifies_declared_total_without_adding_it_twice():
+    report = {"status": "AVAILABLE", "reason_code": "POSITIVE_HISTORY", "monthly_payment": "45000.00"}
+
+    assert bki_scoring_values(report, Decimal("50000.00"))["existing_monthly_debt_payment"] == "50000.00"
+    assert bki_scoring_values(report, Decimal("30000.00"))["existing_monthly_debt_payment"] == "45000.00"
+
+
+def test_declared_total_is_used_when_bki_payment_is_unavailable():
+    report = {"status": "UNAVAILABLE", "reason_code": "PROVIDER_UNAVAILABLE"}
+
+    result = bki_scoring_values(report, Decimal("50000.00"))
+
+    assert result["existing_monthly_debt_payment"] == "50000.00"
+    assert result["check_status"] == "UNKNOWN"
 
 
 def test_compliance_matches_require_identifier_based_manual_review():
