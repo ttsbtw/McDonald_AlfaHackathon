@@ -65,12 +65,17 @@ class MockBKIProvider:
 
 def bki_scoring_values(report: dict, declared_monthly_payment: Decimal) -> dict:
     available = report["status"] in {"AVAILABLE", "NO_HISTORY"}
+    # The application field is the client's total monthly payments across all
+    # existing loans. BKI is a verification source and may describe the same
+    # loans, so adding the two values would double-count overlapping debt.
+    # Use the higher reported total for a conservative scoring input.
+    bki_monthly_payment = Decimal(report.get("monthly_payment", "0.00"))
+    total_existing_monthly_payment = max(declared_monthly_payment, bki_monthly_payment)
     return {
         "credit_history_available": report["status"] == "AVAILABLE",
         "current_overdue_amount": report.get("current_overdue_amount", "0.00"),
         "max_overdue_days_12m": report.get("max_overdue_days_12m", 0),
-        "existing_monthly_debt_payment": format(
-            declared_monthly_payment + Decimal(report.get("monthly_payment", "0.00")), ".2f"),
+        "existing_monthly_debt_payment": format(total_existing_monthly_payment, ".2f"),
         "check_status": "PASS" if available else "UNKNOWN",
         "check_reason": report["reason_code"],
     }

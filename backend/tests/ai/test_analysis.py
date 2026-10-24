@@ -132,6 +132,151 @@ def test_prompt_receives_explicit_financial_sources_and_precomputed_ratios(monke
     assert facts["finance.debt_burden"] == "59,7%"
 
 
+def test_payment_source_hallucination_is_replaced_with_fact_grounded_summary(monkeypatch):
+    content = json.dumps({
+        "summary": ("Платежи в анкете указаны как 0 ₽, но в БКИ и скоринге зафиксированы "
+                    "45 000 ₽ в месяц — это разрыв в данных."),
+        "summary_fact_ids": ["app.declared_debt", "app.debt", "bki.monthly_payment"],
+    })
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["facts"] = json.loads(json.loads(request.data)["messages"][1]["content"])["facts"]
+        return FakeResponse(content)
+
+    monkeypatch.setattr("app.ai_analysis.urlopen", fake_urlopen)
+    application, company, assessment = fixture_application()
+    application.existing_monthly_debt_payment = Decimal("45000.00")
+    assessment.input_snapshot["input_data"]["existing_monthly_debt_payment"] = "45000.00"
+    assessment.result["check_reports"]["bki"].update({
+        "monthly_payment": "45000.00", "status": "AVAILABLE",
+    })
+
+    result = analyze_with_ollama(application, company, assessment, settings())
+
+    comparison = next(fact["value"] for fact in captured["facts"] if fact["id"] == "data.payment_comparison")
+    assert "совпадают" in comparison
+    assert result.used_safe_fallback is True
+    assert "разрыв в данных" not in result.summary
+    assert "анкете указаны как 0" not in result.summary
+
+
+def test_real_payment_source_difference_remains_in_model_summary(monkeypatch):
+    content = json.dumps({
+        "summary": "В анкете указан платёж 0 ₽, тогда как в скоринге и БКИ учтено 45 000 ₽/мес.; значения расходятся.",
+        "summary_fact_ids": ["app.declared_debt", "app.debt", "bki.monthly_payment"],
+    })
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["facts"] = json.loads(json.loads(request.data)["messages"][1]["content"])["facts"]
+        return FakeResponse(content)
+
+    monkeypatch.setattr("app.ai_analysis.urlopen", fake_urlopen)
+    application, company, assessment = fixture_application()
+    application.existing_monthly_debt_payment = Decimal("0.00")
+    assessment.input_snapshot["input_data"]["existing_monthly_debt_payment"] = "45000.00"
+    assessment.result["check_reports"]["bki"].update({"monthly_payment": "45000.00", "status": "AVAILABLE"})
+
+    result = analyze_with_ollama(application, company, assessment, settings())
+
+    comparison = next(fact for fact in captured["facts"] if fact["id"] == "data.payment_comparison")
+    assert "различаются" in comparison["value"]
+    assert result.used_safe_fallback is False
+    assert "значения расходятся" in result.summary
+    assert "data.payment_comparison" in result.summary_fact_ids
+    assert "БКИ сверяется с общей суммой анкеты и не прибавляется к ней" in comparison["value"]
+
+
+def test_payment_comparison_explains_declared_total_and_bki_verification(monkeypatch):
+    content = json.dumps({
+        "summary": ("Клиент указал общие платежи 50 000 ₽/мес., БКИ показывает 45 000 ₽/мес.; "
+                    "скоринг учитывает 50 000 ₽/мес., поскольку БКИ используется для сверки, а не складывается с анкетой."),
+        "summary_fact_ids": ["app.declared_debt", "app.debt", "bki.monthly_payment", "data.payment_comparison"],
+    })
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["facts"] = json.loads(json.loads(request.data)["messages"][1]["content"])["facts"]
+        return FakeResponse(content)
+
+    monkeypatch.setattr("app.ai_analysis.urlopen", fake_urlopen)
+    application, company, assessment = fixture_application()
+    application.existing_monthly_debt_payment = Decimal("50000.00")
+    assessment.input_snapshot["input_data"]["existing_monthly_debt_payment"] = "50000.00"
+    assessment.result["check_reports"]["bki"].update({"monthly_payment": "45000.00", "status": "AVAILABLE"})
+
+    result = analyze_with_ollama(application, company, assessment, settings())
+
+    comparison = next(fact["value"] for fact in captured["facts"] if fact["id"] == "data.payment_comparison")
+    assert "анкета — 50 000 ₽/мес." in comparison
+    assert "БКИ — 45 000 ₽/мес." in comparison
+    assert "учтено 50 000 ₽/мес." in comparison
+    assert "не прибавляется к ней" in comparison
+    assert result.used_safe_fallback is False
+
+
+def test_product_fit_claim_without_matching_description_is_replaced(monkeypatch):
+    content = json.dumps({
+        "summary": ("Цель связана с операционными расходами, что соответствует продукту «Оборудование». "
+                    "Скоринг — 82 из 100, риск низкий."),
+        "summary_fact_ids": ["app.purpose", "app.product", "app.product_description", "score.score", "score.risk"],
+    })
+    monkeypatch.setattr("app.ai_analysis.urlopen", lambda *_args, **_kwargs: FakeResponse(content))
+    application, company, assessment = fixture_application()
+    application.purpose = "Оплата аренды помещения и закупка сырья на ближайшие три месяца"
+    application.product_code = "equipment"
+    product = SimpleNamespace(name="Оборудование — демо", description="Приобретение оборудования")
+
+    result = analyze_with_ollama(application, company, assessment, settings(), product=product)
+
+    assert result.used_safe_fallback is True
+    assert "цель «оплата аренды помещения и закупка сырья" in result.summary.lower()
+    assert "продукт «Оборудование»" in result.summary
+    assert "описанием «Приобретение оборудования»" in result.summary
+    assert "не подтверждают соответствие цели продукту" in result.summary
+
+
+def test_personal_use_and_cover_story_cannot_be_summarized_as_product_fit(monkeypatch):
+    content = json.dumps({
+        "summary": ("Сумма соответствует назначению продукта — приобретению оборудования, но клиент хочет перевести деньги "
+                    "на личную карту, указав в заявке покупку оборудования."),
+        "summary_fact_ids": ["app.purpose", "app.product", "app.product_description"],
+    })
+    monkeypatch.setattr("app.ai_analysis.urlopen", lambda *_args, **_kwargs: FakeResponse(content))
+    application, company, assessment = fixture_application()
+    application.purpose = "Хочу вывести деньги себе на личную карту, а в заявке указать покупку оборудования."
+    application.product_code = "equipment"
+    product = SimpleNamespace(name="Оборудование — демо", description="Приобретение оборудования")
+
+    result = analyze_with_ollama(application, company, assessment, settings(), product=product)
+
+    assert result.used_safe_fallback is True
+    assert "одновременно описывает личное использование средств" in result.summary
+    assert "намерение указать в анкете покупку оборудования" in result.summary
+    assert "соответствует назначению продукта" not in result.summary.lower()
+
+
+def test_nonpositive_profit_is_named_as_root_cause_of_block(monkeypatch):
+    monkeypatch.setattr("app.ai_analysis.urlopen", lambda *_args, **_kwargs: FakeResponse(valid_content()))
+    result_data = {
+        "score": 32, "risk_level": "HIGH", "recommendation": "DECLINE", "assessment_status": "COMPLETED",
+        "hard_stops": ["NON_POSITIVE_OPERATING_PROFIT"],
+        "features": {"monthly_operating_profit": "-50000.00"},
+        "reasons": [{"code": "NON_POSITIVE_OPERATING_PROFIT",
+                     "message": "Доход после операционных расходов не позволяет обслуживать кредит."}],
+        "check_reports": {"bki": {"status": "AVAILABLE"}, "compliance": {"status": "CLEAR"}},
+        "underwriting": {"status": "REVIEW", "rules": [{"code": "DEBT_BURDEN", "outcome": "REVIEW",
+            "reason": "Долговую нагрузку нельзя рассчитать по имеющимся данным."}]},
+    }
+    application, company, assessment = fixture_application(result_data)
+    result = analyze_with_ollama(application, company, assessment, settings())
+
+    assert "расходы превышают выручку на 50 000 ₽/мес." in result.summary.lower()
+    assert "долговую нагрузку нельзя рассчитать" in result.summary.lower()
+    assert "ии не может снять обязательное ограничение" in result.summary.lower()
+
+
 def test_model_can_return_its_own_longer_natural_summary(monkeypatch):
     payload = json.loads(valid_content())
     payload["summary"] += " " + ("Сотрудник оценивает цель заявки и определяет следующий шаг. " * 9)

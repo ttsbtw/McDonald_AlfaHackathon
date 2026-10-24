@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 MODEL_TAG = "qwen3:4b-instruct-2507-q4_K_M"
-PROMPT_VERSION = "credit-score-explainer-v15"
+PROMPT_VERSION = "credit-score-explainer-v19"
 MAX_INPUT_BYTES = 12_000
 MAX_OUTPUT_BYTES = 12_000
 MAX_RECOMMENDATIONS = 1
@@ -129,24 +129,6 @@ def _format_blocking_cause(cause: str) -> str:
     return f"{match.group(1)} — {percent(match.group(2))}; допустимый предел — {percent(match.group(3))}"
 
 
-def _numbers_in_text(value: str) -> set[str]:
-    numbers = set()
-    for match in re.finditer(r"(?<!\w)\d+(?:[ .\u00a0]\d{3})*(?:[,.]\d+)?(?!\w)", value):
-        canonical = _canonical_number(match.group())
-        if canonical is not None:
-            numbers.add(canonical)
-    multipliers = {"тыс": Decimal(1000), "тысяч": Decimal(1000), "млн": Decimal(1_000_000),
-                   "миллион": Decimal(1_000_000), "млрд": Decimal(1_000_000_000),
-                   "миллиард": Decimal(1_000_000_000)}
-    for match in re.finditer(r"(\d+(?:[,.]\d+)?)\s*(тыс\w*|млн\w*|миллион\w*|млрд\w*|миллиард\w*)", value, re.IGNORECASE):
-        amount = _canonical_number(match.group(1))
-        unit = match.group(2).lower()
-        multiplier = next((factor for prefix, factor in multipliers.items() if unit.startswith(prefix)), None)
-        if amount is not None and multiplier is not None:
-            numbers.add(_canonical_number(str(Decimal(amount) * multiplier)))
-    return numbers
-
-
 _FIELD_LABELS = {
     "requested_amount": "сумму кредита", "term_months": "срок кредита", "purpose": "цель кредита",
     "average_monthly_revenue": "среднюю месячную выручку",
@@ -188,6 +170,27 @@ def _safe_brief_summary(result: dict, facts: list[dict], blocking_reasons: list[
     if mandatory_blocks:
         block_ids = [fact["id"] for fact in facts
                      if fact["id"].startswith(("underwriting.rule.", "score.hard_stop."))]
+        hard_stop_codes = {str(stop).split(":", 1)[0] for stop in result.get("hard_stops") or []}
+        if "NON_POSITIVE_OPERATING_PROFIT" in hard_stop_codes:
+            profit = fact_map.get("finance.operating_profit")
+            profit_amount = None
+            if profit is not None:
+                try:
+                    profit_amount = Decimal(profit["value"])
+                except InvalidOperation:
+                    pass
+            if profit_amount is not None and profit_amount < 0:
+                cause_text = (f" Расходы превышают выручку на {_format_ru_number(str(abs(profit_amount)))} ₽/мес.; "
+                              "из-за отрицательной прибыли долговую нагрузку нельзя рассчитать.")
+            elif profit_amount == 0:
+                cause_text = " Выручка равна расходам, поэтому долговую нагрузку нельзя рассчитать."
+            else:
+                cause_text = " Отрицательная прибыль не позволяет рассчитать долговую нагрузку."
+            return (
+                f"{request_context}. {score_text}Заявка требует ручного разбора.{cause_text} "
+                "ИИ не может снять обязательное ограничение.",
+                (context_ids + score_ids + block_ids + ["finance.operating_profit"])[:12],
+            )
         cause = mandatory_blocks[0].split(":", 1)[-1].strip().rstrip(".")
         cause = _format_blocking_cause(cause)
         cause_text = f" Причина: {cause}." if cause else ""
@@ -243,9 +246,131 @@ def _safe_brief_summary(result: dict, facts: list[dict], blocking_reasons: list[
     return summary, citation_ids[:12] or [fact["id"] for fact in facts[:1]]
 
 
+def _safe_product_alignment_summary(result: dict, facts: list[dict]) -> tuple[str, list[str]]:
+    """Avoid inventing product eligibility when the model overstates a textual fit."""
+    fact_map = {fact["id"]: fact for fact in facts}
+    purpose = fact_map.get("app.purpose", {}).get("value", "цель не указана").strip().rstrip(".")
+    product_fact = fact_map.get("app.product")
+    product = _prompt_fact_value(product_fact) if product_fact else "продукт не указан"
+    description = fact_map.get("app.product_description", {}).get("value")
+    product_text = f"выбран продукт «{product}»"
+    if description:
+        product_text += f" с назначением «{description}»"
+    risk_labels = {"LOW": "низкий", "MEDIUM": "средний", "HIGH": "высокий"}
+    score_text = (f"Скоринг — {result['score']} из 100, риск — "
+                  f"{risk_labels.get(result.get('risk_level'), 'не определён')}. "
+                  if result.get("score") is not None else "")
+    if "data.purpose_conflict" in fact_map:
+        summary = (f"В цели заявки указано: «{purpose}». Формулировка одновременно описывает личное использование средств "
+                   "и намерение указать в анкете покупку оборудования. Уточните фактическое назначение средств по процедуре банка. "
+                   f"{score_text}Итоговое решение остаётся за сотрудником банка.")
+    else:
+        summary = (f"В заявке указана цель «{purpose}»; {product_text}. "
+                   "Переданные сведения сами по себе не подтверждают соответствие цели продукту — "
+                   "сверьте это по правилам банка. "
+                   f"{score_text}Итоговое решение остаётся за сотрудником банка.")
+    fact_ids = [fact_id for fact_id in
+                ("app.purpose", "app.product", "app.product_description", "data.purpose_conflict",
+                 "score.score", "score.risk")
+                if fact_id in fact_map]
+    return summary, fact_ids
+
+
+def _payment_claim_is_unsupported(summary: str, facts: list[dict]) -> bool:
+    """Reject payment-source claims that contradict the declared values."""
+    fact_map = {fact["id"]: fact for fact in facts}
+    source_patterns = {
+        "app.declared_debt": r"(?:по данным анкеты|в анкете|по заявке|в заявке)",
+        "app.debt": r"(?:в скоринге|по расч[её]там скоринга|учт[её]н\w* в скоринге)",
+        "bki.monthly_payment": r"(?:по данным БКИ|в БКИ|БКИ)",
+    }
+    money_pattern = re.compile(
+        r"(?<!\w)(\d+(?:[ \u00a0]\d{3})*(?:[,.]\d+)?)\s*(₽|руб\w*|тыс\w*|млн\w*|миллион\w*)",
+        re.IGNORECASE,
+    )
+    multipliers = {"тыс": Decimal(1000), "млн": Decimal(1_000_000), "миллион": Decimal(1_000_000)}
+
+    def values_in_clause(clause: str) -> set[str]:
+        values = set()
+        for match in money_pattern.finditer(clause):
+            number = _canonical_number(match.group(1))
+            unit = match.group(2).lower()
+            multiplier = next((factor for prefix, factor in multipliers.items() if unit.startswith(prefix)), Decimal(1))
+            if number is not None:
+                values.add(_canonical_number(str(Decimal(number) * multiplier)))
+        return values
+
+    for fact_id, source_pattern in source_patterns.items():
+        fact = fact_map.get(fact_id)
+        if fact is None:
+            continue
+        expected = _canonical_number(fact["value"])
+        if expected is None:
+            continue
+        for match in re.finditer(source_pattern, summary, re.IGNORECASE):
+            clause = summary[match.start():match.start() + 150]
+            clause = re.split(r"[.!?;]|,\s*(?:но|а|однако)\b", clause, maxsplit=1, flags=re.IGNORECASE)[0]
+            context = summary[max(0, match.start() - 60):match.start()] + clause
+            if not re.search(r"плат[её]ж|долг", context, re.IGNORECASE):
+                continue
+            asserted_values = values_in_clause(clause)
+            if asserted_values and asserted_values != {expected}:
+                return True
+
+    comparison = fact_map.get("data.payment_comparison", {}).get("value", "")
+    claims_difference = re.search(r"расхожд|разрыв|не совпада|различа|отлича", summary, re.IGNORECASE)
+    if claims_difference and "совпадают" in comparison.lower():
+        return True
+    return False
+
+
+_PRODUCT_ALIGNMENT_CLAIM = re.compile(
+    r"(?:соответств\w*|подход\w*|согласован\w*).{0,55}(?:продукт\w*|услови\w* продукта)|"
+    r"(?:цель|назначени\w*|расходовани\w* средств).{0,75}(?:соответств\w*|подход\w*|согласован\w*).{0,55}"
+    r"(?:продукт\w*|услови\w* продукта)|"
+    r"продукт\w*.{0,75}(?:соответств\w*|подход\w*).{0,55}(?:цель|назначени\w*)",
+    re.IGNORECASE,
+)
+
+
+def _purpose_product_textually_supported(summary: str, facts: list[dict]) -> bool:
+    if not _PRODUCT_ALIGNMENT_CLAIM.search(summary):
+        return True
+    fact_map = {fact["id"]: fact for fact in facts}
+    if "data.purpose_conflict" in fact_map:
+        return False
+    purpose = fact_map.get("app.purpose", {}).get("value", "")
+    description = fact_map.get("app.product_description", {}).get("value", "")
+    if not description:
+        return False
+    stop_words = {"цель", "кредит", "кредита", "для", "приобретение", "продукт", "средств", "средства"}
+    def stems(value: str) -> set[str]:
+        return {word[:5] for word in re.findall(r"[а-яёa-z]{4,}", value.lower()) if word not in stop_words}
+    return bool(stems(purpose) & stems(description))
+
+
+def _purpose_contains_cover_story(purpose: str) -> bool:
+    personal_use = re.search(r"(?:личн\w*\s+(?:карт\w*|нужд\w*)|деньги\s+себе|себе\s+на\s+карт\w*)",
+                             purpose, re.IGNORECASE)
+    declared_story = re.search(r"(?:указ\w*|заяв\w*|запис\w*|оформ\w*).{0,60}(?:в\s+)?(?:анкете|заявке)|"
+                               r"(?:в\s+)?(?:анкете|заявке).{0,60}(?:указ\w*|заяв\w*|запис\w*|оформ\w*)",
+                               purpose, re.IGNORECASE)
+    return bool(personal_use and declared_story)
+
+
+def _summary_addresses_purpose_conflict(summary: str) -> bool:
+    mentions_personal_use = bool(re.search(
+        r"личн\w*\s+(?:карт\w*|использован\w*|цел\w*)|деньг\w*\s+себе", summary, re.IGNORECASE,
+    ))
+    mentions_declared_purpose = bool(re.search(
+        r"(?:анкете|заявке|заявленн\w* цел\w*|покупк\w* оборудования)", summary, re.IGNORECASE,
+    ))
+    return mentions_personal_use and mentions_declared_purpose
+
+
 SYSTEM_PROMPT = """Ты помощник сотрудника банка. Самостоятельно сформулируй понятное пояснение по одной заявке: что важно в её обстоятельствах, как это соотносится с результатом скоринга и что логично сделать дальше. Пиши естественно, как сотрудник объяснил бы ситуацию коллеге. Не пересказывай таблицу полей и не используй шаблонный набор фраз. Обычно достаточно 3–5 содержательных предложений; не пытайся перечислить каждый факт. Упоминай только параметры, которые помогают понять именно эту заявку; предложенный следующий шаг должен вытекать из её фактов.
 
-Опирайся только на переданные факты и уже рассчитанные показатели. Не вычисляй финансовые коэффициенты сам и не выдумывай причины, значения, историю клиента или правила банка. В финансовых полях суммы уже указаны в рублях: сохраняй значение точно, не округляй его и не меняй порядок величины. Платежи из анкеты, БКИ и итоговый расчётный платёж после нового кредита — разные показатели; не подменяй один другим. Само по себе совпадение суммы заявки и выручки не доказывает недостоверность выручки. Если цель и выбранный продукт выглядят несвязанными, назови это поводом уточнить план использования средств, а не утверждай, что продукт не подходит или нарушена политика банка, если в фактах нет такого правила. Статусы обязательных проверок и правила underwriting авторитетны: не противоречь им. При блокирующей проверке назови ограничение и его причину; ИИ не может снять или обойти блокировку.
+Опирайся только на переданные факты и уже рассчитанные показатели. Не вычисляй финансовые коэффициенты сам и не выдумывай причины, значения, историю клиента или правила банка. В финансовых полях суммы уже указаны в рублях: сохраняй значение точно, не округляй его и не меняй порядок величины. Платёж в анкете — общая сумма по действующим кредитам; показатель скоринга формируется из анкеты и БКИ как большая из двух сумм, а не их сумма. БКИ — отдельный источник сверки, его значение не нужно прибавлять к общей сумме из анкеты. Если data.payment_comparison указывает, что значения анкеты и БКИ различаются, описывай это как расхождение источников и при необходимости рекомендуй сверить сумму; не называй сумму, учтённую скорингом, третьей независимой оценкой. Указывай только суммы из фактов. Само по себе совпадение суммы заявки и выручки не доказывает недостоверность выручки. Сопоставляй цель с назначением продукта только по переданному описанию продукта. Не заявляй, что продукт соответствует цели или что банк допускает такую цель, если это не следует прямо из фактов; при неясной связи предложи сотруднику сверить назначение по правилам банка. Если факт data.purpose_conflict указывает на противоречие между личным использованием денег и указанной целью в анкете, назови оба обстоятельства и рекомендуй уточнить фактическое назначение; не своди цель только к покупке из анкеты и не объявляй продукт подходящим. Не проси подтверждать или уточнять явно конкретную цель без причины в данных. Статусы обязательных проверок и правила underwriting авторитетны: не противоречь им. При блокирующей проверке назови первопричину ограничения, даже если другая проверка также не может быть рассчитана; ИИ не может снять или обойти блокировку.
 
 Не принимай кредитное решение за сотрудника: не утверждай, что кредит одобрен или отклонён, и не обещай результат. Каждое числовое утверждение должно подтверждаться указанными идентификаторами фактов. Верни только JSON по переданной схеме с полями summary и summary_fact_ids. В summary_fact_ids перечисли использованные факты. Не добавляй другие поля. Пиши по-русски."""
 
@@ -328,7 +453,7 @@ def _prompt_fact_value(fact: dict) -> str:
     return value
 
 
-def make_facts(application, company, assessment, compliance_review=None) -> tuple[list[dict], list[str]]:
+def make_facts(application, company, assessment, compliance_review=None, product=None) -> tuple[list[dict], list[str]]:
     result = assessment.result or {}
     snapshot = assessment.input_snapshot or {}
     input_data = snapshot.get("input_data") or result.get("input_snapshot", {}).get("input_data") or {}
@@ -343,13 +468,18 @@ def make_facts(application, company, assessment, compliance_review=None) -> tupl
     add("app.term", "Срок, месяцев", application.term_months)
     add("app.purpose", "Цель кредита", application.purpose)
     add("app.product", "Код продукта", application.product_code)
+    if _purpose_contains_cover_story(str(application.purpose or "")):
+        add("data.purpose_conflict", "Признак противоречия в цели",
+            "В тексте цели упомянуты личное использование денег и намерение указать иную цель в анкете.")
+    if product is not None:
+        add("app.product_description", "Назначение продукта по описанию", product.description)
     add("company.legal_form", "Организационная форма", company.legal_form)
     add("company.registration_date", "Дата регистрации", input_data.get("registration_date") or company.registration_date)
     add("app.revenue", "Средняя месячная выручка, руб.", input_data.get("average_monthly_revenue"))
     add("app.expenses", "Средние месячные расходы, руб.", input_data.get("average_monthly_operating_expenses"))
     add("app.declared_debt", "Платежи, указанные в анкете, руб./мес.",
         getattr(application, "existing_monthly_debt_payment", None))
-    add("app.debt", "Существующие месячные платежи, учтённые в скоринге, руб./мес.",
+    add("app.debt", "Общая сумма текущих платежей, учтённая в скоринге, руб./мес.",
         input_data.get("existing_monthly_debt_payment"))
     add("score.score", "Балл скоринга из 100", result.get("score"))
     add("score.scale", "Максимальный балл", 100 if result.get("score") is not None else None)
@@ -392,6 +522,20 @@ def make_facts(application, company, assessment, compliance_review=None) -> tupl
             add("bki.overdue_amount", "Просроченная задолженность, руб.", report.get("current_overdue_amount"))
             add("bki.overdue_days", "Максимальная просрочка за 12 месяцев, дней", report.get("max_overdue_days_12m"))
 
+    declared_payment = getattr(application, "existing_monthly_debt_payment", None)
+    bki_payment = (reports.get("bki") or {}).get("monthly_payment")
+    score_payment = input_data.get("existing_monthly_debt_payment")
+    if declared_payment is not None and bki_payment is not None:
+        declared_value, bki_value = Decimal(str(declared_payment)), Decimal(str(bki_payment))
+        same = declared_value == bki_value
+        compared = "совпадают" if same else "различаются"
+        joined = (f"анкета — {_format_ru_number(str(declared_value))} ₽/мес.; "
+                  f"БКИ — {_format_ru_number(str(bki_value))} ₽/мес.")
+        scoring = (f"В скоринге учтено {_format_ru_number(str(Decimal(str(score_payment))))} ₽/мес."
+                   if score_payment is not None else "")
+        add("data.payment_comparison", "Сверка платежей анкеты и БКИ",
+            f"Значения {compared}: {joined}. {scoring} БКИ сверяется с общей суммой анкеты и не прибавляется к ней.")
+
     underwriting = result.get("underwriting") or {}
     add("underwriting.status", "Результат обязательных правил", underwriting.get("status"))
     blocking_reasons: list[str] = []
@@ -422,9 +566,9 @@ def make_facts(application, company, assessment, compliance_review=None) -> tupl
     return facts, list(dict.fromkeys(blocking_reasons))
 
 
-def analyze_with_ollama(application, company, assessment, settings, compliance_review=None) -> AIAnalysisOut:
+def analyze_with_ollama(application, company, assessment, settings, compliance_review=None, product=None) -> AIAnalysisOut:
     result = assessment.result or {}
-    facts, blocking_reasons = make_facts(application, company, assessment, compliance_review)
+    facts, blocking_reasons = make_facts(application, company, assessment, compliance_review, product)
     request_input = {
         "application_id": str(application.id),
         "revision": assessment.application_revision,
@@ -485,9 +629,21 @@ def analyze_with_ollama(application, company, assessment, settings, compliance_r
         r"завершено.{0,20}без.{0,20}провер|скоринг.{0,30}(подтвержд.{0,20}одобр|подтверждает одобр))",
         re.IGNORECASE,
     )
-    unsafe_text = bool(forbidden_decision_claim.search(answer.summary))
+    has_purpose_conflict = any(fact["id"] == "data.purpose_conflict" for fact in facts)
+    purpose_conflict_omitted = has_purpose_conflict and not _summary_addresses_purpose_conflict(answer.summary)
+    unsupported_product_claim = not _purpose_product_textually_supported(answer.summary, facts)
+    unsupported_payment_claim = _payment_claim_is_unsupported(answer.summary, facts)
+    unsafe_text = bool(forbidden_decision_claim.search(answer.summary) or unsupported_product_claim
+                       or unsupported_payment_claim or purpose_conflict_omitted)
     if unsafe_text:
-        answer.summary, answer.summary_fact_ids = _safe_brief_summary(result, facts, blocking_reasons)
+        if (has_purpose_conflict or unsupported_product_claim) and not blocking_reasons:
+            answer.summary, answer.summary_fact_ids = _safe_product_alignment_summary(result, facts)
+        else:
+            answer.summary, answer.summary_fact_ids = _safe_brief_summary(result, facts, blocking_reasons)
+    if re.search(r"расхожд|разрыв|не совпада|различа|отлича", answer.summary, re.IGNORECASE):
+        comparison_fact = next((fact["id"] for fact in facts if fact["id"] == "data.payment_comparison"), None)
+        if comparison_fact and comparison_fact not in answer.summary_fact_ids:
+            answer.summary_fact_ids.append(comparison_fact)
 
     action_by_recommendation = {
         "APPROVE": "CONTINUE_REVIEW", "REVIEW": "VERIFY_DATA",

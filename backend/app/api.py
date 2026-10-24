@@ -434,7 +434,8 @@ def bank_ai_analysis_result(application_id: UUID, db: DB, user: BankEmployee):
     )
     final_decision = item.status in {"APPROVED", "REJECTED"}
     if (assessment is None or (not final_decision and assessment.application_revision + 1 != item.revision)
-            or saved.assessment_id != assessment.id or saved.prompt_version != PROMPT_VERSION):
+            or saved.assessment_id != assessment.id
+            or (not final_decision and saved.prompt_version != PROMPT_VERSION)):
         db.delete(saved)
         db.commit()
         return None
@@ -453,6 +454,7 @@ def bank_ai_analysis(application_id: UUID, request: Request, db: DB, user: BankE
     company = db.get(Company, item.company_id)
     if company is None:
         raise APIError(409, "COMPANY_REQUIRED", "Для заявки не найдены сведения о компании.")
+    product = db.get(CreditProduct, item.product_code)
     compliance_review = db.scalar(
         select(ComplianceReview)
         .where(ComplianceReview.application_id == item.id, ComplianceReview.assessment_id == assessment.id)
@@ -460,7 +462,8 @@ def bank_ai_analysis(application_id: UUID, request: Request, db: DB, user: BankE
         .limit(1)
     )
     try:
-        result = analyze_with_ollama(item, company, assessment, request.app.state.settings, compliance_review)
+        result = analyze_with_ollama(item, company, assessment, request.app.state.settings,
+                                     compliance_review, product)
     except OllamaModelMissing:
         raise APIError(503, "OLLAMA_MODEL_MISSING",
                        "Локальная модель Ollama не найдена. Загрузите настроенную модель и повторите анализ.") from None

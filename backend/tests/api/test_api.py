@@ -362,7 +362,7 @@ def test_employee_ai_analysis_is_explanatory_and_audited(client, application, he
         data_warnings=[], blocking_reasons=[], is_blocked=False, used_safe_fallback=False,
     )
     calls = []
-    monkeypatch.setattr("app.api.analyze_with_ollama", lambda item, company, assessment, settings, compliance_review=None: calls.append(str(item.id)) or response_payload)
+    monkeypatch.setattr("app.api.analyze_with_ollama", lambda item, company, assessment, settings, compliance_review=None, product=None: calls.append(str(item.id)) or response_payload)
     response = client.post(f"/api/v1/bank/applications/{draft['id']}/ai-analysis", headers=employee_headers)
     assert response.status_code == 200, response.text
     assert response.json()["application_id"] == draft["id"]
