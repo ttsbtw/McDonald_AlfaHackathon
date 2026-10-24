@@ -143,6 +143,8 @@ docker compose up -d
 | GET | `/api/v1/bank/companies/{company_id}/history` | История отправленных заявок компании; limit 1–100, offset >=0 |
 | GET | `/api/v1/bank/applications/{id}` | Карточка заявки с клиентом, компанией, продуктом и последней оценкой |
 | GET | `/api/v1/bank/applications/{id}/assessments` | Все оценки заявки, от новой к старой |
+| GET | `/api/v1/bank/applications/{id}/ai-analysis` | Последний проверенный ИИ-анализ текущей оценки; `null`, если результата ещё нет или данные изменились |
+| POST | `/api/v1/bank/applications/{id}/ai-analysis` | Создать и сохранить новый локальный ИИ-анализ текущей оценки |
 | GET | `/api/v1/bank/applications/{id}/audit?format=json` | Журнал проверок и этапов конвейера; поддерживается также `format=csv` |
 | POST | `/api/v1/bank/applications/{id}/compliance-review` | Зафиксировать ручной разбор совпадения `CLEAR` или `CONFIRMED_MATCH` |
 | POST | `/api/v1/bank/applications/{id}/request-info` | Запрос уточнения с обязательным комментарием |

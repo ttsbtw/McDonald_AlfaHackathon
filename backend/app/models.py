@@ -128,6 +128,21 @@ class Assessment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class AIAnalysisRecord(Base):
+    """Latest validated explanatory answer for an application's current assessment."""
+    __tablename__ = "ai_analysis_records"
+    __table_args__ = (Index("ix_ai_analysis_records_assessment", "assessment_id"),)
+
+    application_id: Mapped[UUID] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"), primary_key=True,
+    )
+    assessment_id: Mapped[UUID] = mapped_column(ForeignKey("assessments.id", ondelete="CASCADE"))
+    response: Mapped[dict] = mapped_column(JSONB)
+    model: Mapped[str] = mapped_column(String(100))
+    prompt_version: Mapped[str] = mapped_column(String(100))
+    analyzed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class AuditLog(Base):
     """Append-only, analytics-ready record of checks and scoring pipeline steps."""
     __tablename__ = "audit_logs"

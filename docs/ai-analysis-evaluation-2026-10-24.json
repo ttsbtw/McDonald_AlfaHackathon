@@ -4,12 +4,12 @@
     {
       "case": "обычное рассмотрение",
       "analysis": {
-        "analysis_id": "42de56ae-0578-482b-b987-90c5cc8fe9d3",
+        "analysis_id": "7fb19473-fa3a-4d3b-b92d-daa64d2d8b89",
         "application_id": "00000000-0000-0000-0000-00000000005a",
-        "analyzed_at": "2026-10-24T09:24:38.315463Z",
+        "analyzed_at": "2026-10-24T10:11:48.965429Z",
         "model": "qwen3:4b-instruct-2507-q4_K_M",
-        "prompt_version": "credit-score-explainer-v3",
-        "summary": "Балл скоринга: 82 из 100. Оценка риска: LOW. Скоринговая рекомендация: APPROVE.",
+        "prompt_version": "credit-score-explainer-v4",
+        "summary": "По текущим данным профиль выглядит сильным: 82 балла из 100, риск низкий. Скоринг даёт положительную рекомендацию; итоговое решение остаётся за сотрудником.",
         "summary_fact_ids": [
           "score.score",
           "score.scale",
@@ -59,17 +59,19 @@
     {
       "case": "высокий риск",
       "analysis": {
-        "analysis_id": "3aa4bace-1b79-4901-886a-070ccb695710",
+        "analysis_id": "02260781-bcb5-43a5-a0f6-a7187dd187d0",
         "application_id": "00000000-0000-0000-0000-00000000002f",
-        "analyzed_at": "2026-10-24T09:24:50.855763Z",
+        "analyzed_at": "2026-10-24T10:12:02.872589Z",
         "model": "qwen3:4b-instruct-2507-q4_K_M",
-        "prompt_version": "credit-score-explainer-v3",
-        "summary": "Балл скоринга: 38 из 100. Оценка риска: HIGH. Скоринговая рекомендация: DECLINE.",
+        "prompt_version": "credit-score-explainer-v4",
+        "summary": "Балл скоринга: 38 из 100. Оценка риска — высокий. Рекомендация скоринга: отрицательная, но это не итоговое решение банка. Факторы, повлиявшие на оценку: Долговая нагрузка превышает лимит продукта; 0 из 20: Долговые платежи занимают значительную часть прибыли.",
         "summary_fact_ids": [
           "score.score",
           "score.scale",
           "score.risk",
-          "score.recommendation"
+          "score.recommendation",
+          "score.reason.0",
+          "score.factor.DEBT_BURDEN"
         ],
         "evidence": [
           {
@@ -91,17 +93,25 @@
             "id": "score.recommendation",
             "label": "Рекомендация скоринга",
             "value": "DECLINE"
+          },
+          {
+            "id": "score.reason.0",
+            "label": "Причина скоринговой рекомендации",
+            "value": "Долговая нагрузка превышает лимит продукта."
+          },
+          {
+            "id": "score.factor.DEBT_BURDEN",
+            "label": "Фактор, повлиявший на скоринг",
+            "value": "0 из 20: Долговые платежи занимают значительную часть прибыли."
           }
         ],
         "recommendations": [
           {
-            "action": "CONTINUE_REVIEW",
-            "text": "Продолжить рассмотрение человеком по установленной процедуре.",
+            "action": "VERIFY_DATA",
+            "text": "Перепроверьте показатели, перечисленные среди факторов оценки. Если сведения актуальны, сотрудник может рассмотреть дальнейшие варианты в рамках правил банка.",
             "fact_ids": [
-              "score.score",
-              "score.scale",
-              "score.risk",
-              "score.recommendation"
+              "score.reason.0",
+              "score.factor.DEBT_BURDEN"
             ]
           }
         ],
@@ -114,13 +124,14 @@
     {
       "case": "обязательная блокировка",
       "analysis": {
-        "analysis_id": "67fe40f2-7723-4651-bd1d-652ec7e5ec7a",
+        "analysis_id": "c4bb4b05-fdc6-4d24-b2ac-bd335e8000ca",
         "application_id": "00000000-0000-0000-0000-000000000067",
-        "analyzed_at": "2026-10-24T09:24:58.547890Z",
+        "analyzed_at": "2026-10-24T10:12:14.093166Z",
         "model": "qwen3:4b-instruct-2507-q4_K_M",
-        "prompt_version": "credit-score-explainer-v3",
-        "summary": "Балл скоринга: 96 из 100. Оценка риска: LOW. Скоринговая рекомендация: APPROVE.",
+        "prompt_version": "credit-score-explainer-v4",
+        "summary": "Заявку блокирует обязательная проверка. Её результат нужно разрешить по установленной процедуре; ИИ не может снять это ограничение.",
         "summary_fact_ids": [
+          "underwriting.rule.0",
           "score.score",
           "score.scale",
           "score.risk",
@@ -173,98 +184,33 @@
           "COMPLIANCE_CONFIRMED_MATCH: Требуется разбор сотрудником"
         ],
         "is_blocked": true,
-        "used_safe_fallback": true
+        "used_safe_fallback": false
       }
     },
     {
       "case": "неполные данные",
       "analysis": {
-        "analysis_id": "4d776112-87b8-4d5d-93aa-5462da520b11",
+        "analysis_id": "823718ce-8bfd-4c6e-b712-7ab42e82cf2b",
         "application_id": "00000000-0000-0000-0000-0000000001fe",
-        "analyzed_at": "2026-10-24T09:25:13.639620Z",
+        "analyzed_at": "2026-10-24T10:12:23.815207Z",
         "model": "qwen3:4b-instruct-2507-q4_K_M",
-        "prompt_version": "credit-score-explainer-v3",
-        "summary": "Запрошенная сумма 300 000 руб. на 12 месяцев для оборотных средств. Оценка риска не рассчитана, нагрузка на доход не определена. Проверка кредитной истории и BKI прошла успешно, но требуется информация о среднемесячном доходе.",
+        "prompt_version": "credit-score-explainer-v4",
+        "summary": "Для завершения рассмотрения запросите недостающие сведения: средняя месячная выручка.",
         "summary_fact_ids": [
-          "app.amount",
-          "app.term",
-          "app.purpose",
-          "app.product",
-          "company.legal_form",
-          "company.registration_date",
-          "app.expenses",
-          "app.debt"
+          "data.missing.0",
+          "score.risk",
+          "score.recommendation"
         ],
         "evidence": [
           {
-            "id": "app.amount",
-            "label": "Запрошенная сумма, руб.",
-            "value": "300000.00"
+            "id": "score.risk",
+            "label": "Оценка риска",
+            "value": "UNKNOWN"
           },
           {
-            "id": "app.term",
-            "label": "Срок, месяцев",
-            "value": "12"
-          },
-          {
-            "id": "app.purpose",
-            "label": "Цель кредита",
-            "value": "Оборотные средства"
-          },
-          {
-            "id": "app.product",
-            "label": "Код продукта",
-            "value": "working_capital"
-          },
-          {
-            "id": "company.legal_form",
-            "label": "Организационная форма",
-            "value": "OOO"
-          },
-          {
-            "id": "company.registration_date",
-            "label": "Дата регистрации",
-            "value": "2020-01-01"
-          },
-          {
-            "id": "app.expenses",
-            "label": "Средние месячные расходы, руб.",
-            "value": "600000.00"
-          },
-          {
-            "id": "app.debt",
-            "label": "Существующие месячные платежи, руб.",
-            "value": "50000.00"
-          },
-          {
-            "id": "underwriting.status",
-            "label": "Результат обязательных правил",
-            "value": "REVIEW"
-          },
-          {
-            "id": "underwriting.rule.0",
-            "label": "Результат обязательного правила",
-            "value": "MIN_BUSINESS_AGE: PASS; Возраст бизнеса выше минимума."
-          },
-          {
-            "id": "underwriting.rule.1",
-            "label": "Результат обязательного правила",
-            "value": "PRODUCT_AMOUNT_LIMIT: PASS; Сумма в диапазоне продукта."
-          },
-          {
-            "id": "underwriting.rule.2",
-            "label": "Результат обязательного правила",
-            "value": "DEBT_BURDEN: REVIEW; Нагрузка не рассчитана."
-          },
-          {
-            "id": "underwriting.rule.3",
-            "label": "Результат обязательного правила",
-            "value": "BKI_HISTORY: PASS; История доступна."
-          },
-          {
-            "id": "underwriting.rule.4",
-            "label": "Результат обязательного правила",
-            "value": "COMPLIANCE_CLEAR: PASS; Совпадений нет."
+            "id": "score.recommendation",
+            "label": "Рекомендация скоринга",
+            "value": "REQUEST_INFO"
           },
           {
             "id": "data.missing.0",
@@ -274,15 +220,10 @@
         ],
         "recommendations": [
           {
-            "action": "REVIEW_REQUIRED",
-            "text": "Выдача заблокирована обязательной проверкой. Причину следует разрешать только по установленной процедуре.",
+            "action": "REQUEST_INFORMATION",
+            "text": "Запросите у клиента перечисленные обязательные сведения, затем обновите оценку.",
             "fact_ids": [
-              "underwriting.status",
-              "underwriting.rule.0",
-              "underwriting.rule.1",
-              "underwriting.rule.2",
-              "underwriting.rule.3",
-              "underwriting.rule.4"
+              "data.missing.0"
             ]
           }
         ],
@@ -295,7 +236,6 @@
           }
         ],
         "blocking_reasons": [
-          "DEBT_BURDEN: Нагрузка не рассчитана.",
           "Оценка неполная: нельзя завершить одобрение до получения недостающих данных."
         ],
         "is_blocked": true,

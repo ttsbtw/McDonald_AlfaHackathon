@@ -115,6 +115,7 @@ export const api = {
   ),
   bankAssessments: (id) => request(`/bank/applications/${id}/assessments`),
   analyzeBankScoring: (id) => request(`/bank/applications/${id}/ai-analysis`, { method: "POST" }),
+  bankAIAnalysis: (id) => request(`/bank/applications/${id}/ai-analysis`),
   bankAudit: (id) => request(`/bank/applications/${id}/audit?format=json`),
   downloadBankAudit: (id, format) => download(
     `/bank/applications/${id}/audit?format=${format}`,

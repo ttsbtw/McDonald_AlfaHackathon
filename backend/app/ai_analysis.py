@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 MODEL_TAG = "qwen3:4b-instruct-2507-q4_K_M"
-PROMPT_VERSION = "credit-score-explainer-v3"
+PROMPT_VERSION = "credit-score-explainer-v4"
 MAX_INPUT_BYTES = 12_000
 MAX_OUTPUT_BYTES = 8_000
 MAX_RECOMMENDATIONS = 4
@@ -109,6 +109,20 @@ def _numbers_in_text(value: str) -> set[str]:
     return numbers
 
 
+def _score_phrase(score: int) -> str:
+    last_two = score % 100
+    last = score % 10
+    if 11 <= last_two <= 14:
+        word = "баллов"
+    elif last == 1:
+        word = "балл"
+    elif 2 <= last <= 4:
+        word = "балла"
+    else:
+        word = "баллов"
+    return f"{score} {word} из 100"
+
+
 SYSTEM_PROMPT = """Ты помощник сотрудника банка, который только поясняет уже рассчитанные факты.
 Используй исключительно переданные факты одной заявки. Не пересчитывай балл и риск,
 не выдумывай сведения, причины, правила или проверки. Не одобряй и не отклоняй кредит,
@@ -121,8 +135,46 @@ SYSTEM_PROMPT = """Ты помощник сотрудника банка, кот
 В предупреждения включай только явные пропуски либо противоречия из входа; если их нет,
 верни пустой список. Не переписывай цифрами суммы, сроки, баллы, даты и коды: исходные
 значения интерфейс покажет отдельно по ссылкам на факты. Дай краткое резюме максимум в
-двух предложениях и одну короткую рекомендацию. Верни только JSON строго по переданной
-схеме. Пиши по-русски."""
+двух предложениях и одну короткую рекомендацию. Пиши живым, ясным русским языком для
+сотрудника без технической терминологии. Не повторяй английские коды риска, решений и
+проверок. Для сильного профиля назови положительные факторы и подчеркни, что это рекомендация
+скоринга, а не одобрение кредита. Для слабого профиля объясни конкретные неблагоприятные
+факторы из переданных причин/факторов и что сотруднику можно перепроверить или запросить.
+Не советуй менять верные сведения и не обещай, что исправление гарантирует одобрение.
+Верни только JSON строго по переданной схеме. Пиши по-русски."""
+
+
+def _prompt_fact_value(fact: dict) -> str:
+    value = fact["value"]
+    localized = {
+        "LOW": "низкий",
+        "MEDIUM": "средний",
+        "HIGH": "высокий",
+        "UNKNOWN": "не определён",
+        "APPROVE": "положительная рекомендация скоринга (не итоговое решение банка)",
+        "REVIEW": "нужно дополнительное рассмотрение",
+        "DECLINE": "отрицательная рекомендация скоринга (не итоговое решение банка)",
+        "REQUEST_INFO": "нужно запросить сведения",
+        "PASS": "пройдена",
+        "FAIL": "не пройдена",
+        "CLEAR": "совпадений нет",
+        "AVAILABLE": "данные получены",
+        "NO_HISTORY": "кредитной истории нет",
+        "UNAVAILABLE": "источник недоступен",
+        "ERROR": "техническая ошибка источника",
+        "POTENTIAL_MATCH": "возможное совпадение",
+        "CONFIRMED_MATCH": "совпадение подтверждено",
+        "COMPLETED": "оценка завершена",
+        "INSUFFICIENT_DATA": "недостаточно данных",
+    }
+    if fact["id"] in {"score.risk", "score.recommendation", "score.status"} or fact["id"].endswith(".status"):
+        return localized.get(value, value)
+    if fact["id"].startswith("underwriting.rule."):
+        match = re.match(r"([^:]+):\s*(PASS|REVIEW|REJECT)(.*)", value)
+        if match:
+            reason = {"PASS": "пройдено", "REVIEW": "нужна ручная проверка", "REJECT": "ограничение"}[match.group(2)]
+            return f"{match.group(1)}: {reason}{match.group(3)}"
+    return value
 
 
 def make_facts(application, company, assessment, compliance_review=None) -> tuple[list[dict], list[str]]:
@@ -152,6 +204,13 @@ def make_facts(application, company, assessment, compliance_review=None) -> tupl
     add("score.status", "Полнота оценки", result.get("assessment_status"))
     for index, reason in enumerate(result.get("reasons") or []):
         add(f"score.reason.{index}", "Причина скоринговой рекомендации", reason.get("explanation") or reason.get("code"))
+    for factor in result.get("factors") or []:
+        code = factor.get("code") or "factor"
+        points = factor.get("points")
+        maximum = factor.get("max_points")
+        explanation = factor.get("explanation") or ""
+        value = f"{points} из {maximum}: {explanation}" if points is not None and maximum is not None else explanation
+        add(f"score.factor.{code}", "Фактор, повлиявший на скоринг", value)
     for index, stop in enumerate(result.get("hard_stops") or []):
         add(f"score.hard_stop.{index}", "Код обязательного ограничения", stop)
     for check in checks:
@@ -203,7 +262,7 @@ def analyze_with_ollama(application, company, assessment, settings, compliance_r
     request_input = {
         "application_id": str(application.id),
         "revision": assessment.application_revision,
-        "facts": facts,
+        "facts": [{**fact, "value": _prompt_fact_value(fact)} for fact in facts],
     }
     encoded_input = json.dumps(request_input, ensure_ascii=False, separators=(",", ":"))
     if len(encoded_input.encode("utf-8")) > MAX_INPUT_BYTES:
@@ -248,12 +307,43 @@ def analyze_with_ollama(application, company, assessment, settings, compliance_r
 
     if blocking_reasons:
         # A hard stop is authoritative: the model cannot soften or remove it.
-        answer.recommendations = [AIRecommendation(
-            action="REVIEW_REQUIRED",
-            text="Выдача заблокирована обязательной проверкой. Причину следует разрешать только по установленной процедуре.",
-            fact_ids=[fact["id"] for fact in facts if fact["id"].startswith(("underwriting.", "score.hard_stop."))][:6]
-                   or answer.summary_fact_ids[:6],
-        )]
+        missing_fields = list(result.get("missing_fields") or [])
+        mandatory_blocking_reasons = [
+            reason for reason in blocking_reasons
+            if not reason.startswith("Оценка неполная:")
+        ]
+        blocking_fact_ids = [fact["id"] for fact in facts
+                             if fact["id"].startswith(("underwriting.rule.", "score.hard_stop.", "data.missing."))]
+        score_fact_ids = [fact_id for fact_id in ("score.score", "score.scale", "score.risk", "score.recommendation")
+                          if fact_id in {fact["id"] for fact in facts}]
+        missing_fact_ids = [fact["id"] for fact in facts if fact["id"].startswith("data.missing.")]
+        if missing_fields and not mandatory_blocking_reasons:
+            field_labels = {
+                "requested_amount": "сумма кредита", "term_months": "срок кредита", "purpose": "цель кредита",
+                "average_monthly_revenue": "средняя месячная выручка",
+                "average_monthly_operating_expenses": "средние месячные расходы",
+                "existing_monthly_debt_payment": "текущие платежи по долгам",
+            }
+            missing_labels = [field_labels.get(name, name) for name in missing_fields[:4]]
+            answer.summary = "Для завершения рассмотрения запросите недостающие сведения: " + ", ".join(missing_labels) + "."
+            answer.summary_fact_ids = (missing_fact_ids + score_fact_ids)[:8]
+            answer.recommendations = [AIRecommendation(
+                action="REQUEST_INFORMATION",
+                text="Запросите у клиента перечисленные обязательные сведения, затем обновите оценку.",
+                fact_ids=missing_fact_ids[:6] or answer.summary_fact_ids[:6],
+            )]
+        else:
+            answer.summary = (
+                "Заявку блокирует обязательная проверка. Её результат нужно разрешить по установленной процедуре; "
+                "ИИ не может снять это ограничение."
+            )
+            answer.summary_fact_ids = (blocking_fact_ids[:4] + score_fact_ids)[:8]
+            answer.recommendations = [AIRecommendation(
+                action="REVIEW_REQUIRED",
+                text="Выдача заблокирована обязательной проверкой. Причину следует разрешать только по установленной процедуре.",
+                fact_ids=[fact["id"] for fact in facts if fact["id"].startswith(("underwriting.", "score.hard_stop."))][:6]
+                       or answer.summary_fact_ids[:6],
+            )]
     else:
         answer.recommendations = [
             item for item in answer.recommendations if item.action != "REVIEW_REQUIRED"
@@ -345,24 +435,66 @@ def analyze_with_ollama(application, company, assessment, settings, compliance_r
             answer.summary = "Оценка неполная. В списке фактов указаны недостающие обязательные данные."
             answer.summary_fact_ids = ([fact["id"] for fact in facts if fact["id"].startswith("data.missing.")][:8]
                                        or (["score.status"] if "score.status" in valid_ids else [facts[0]["id"]]))
+        elif blocking_reasons:
+            score_fact_ids = [fact_id for fact_id in ("score.score", "score.scale", "score.risk", "score.recommendation")
+                              if fact_id in valid_ids]
+            blocking_fact_ids = [fact["id"] for fact in facts
+                                 if fact["id"].startswith(("underwriting.rule.", "score.hard_stop."))]
+            answer.summary = (
+                "Заявку блокирует обязательная проверка. Её результат нужно разрешить по установленной процедуре; "
+                "ИИ не может снять это ограничение."
+            )
+            answer.summary_fact_ids = (blocking_fact_ids[:4] + score_fact_ids)[:8]
+        elif result.get("recommendation") == "APPROVE" and result.get("risk_level") == "LOW":
+            answer.summary = (
+                f"По текущим данным профиль выглядит сильным: {_score_phrase(result['score'])}, риск низкий. "
+                "Скоринг даёт положительную рекомендацию; итоговое решение остаётся за сотрудником."
+            )
+            answer.summary_fact_ids = [
+                fact_id for fact_id in ("score.score", "score.scale", "score.risk", "score.recommendation")
+                if fact_id in valid_ids
+            ]
         else:
             score_ids = [fact_id for fact_id in ("score.score", "score.scale", "score.risk", "score.recommendation")
                          if fact_id in valid_ids]
+            issue_ids = [fact["id"] for fact in facts
+                         if fact["id"].startswith(("score.reason.", "score.factor."))]
             parts = []
             if result.get("score") is not None:
                 parts.append(f"Балл скоринга: {result['score']} из 100.")
             if result.get("risk_level"):
-                parts.append(f"Оценка риска: {result['risk_level']}.")
+                risk = {"LOW": "низкий", "MEDIUM": "средний", "HIGH": "высокий"}.get(
+                    result["risk_level"], "не определён")
+                parts.append(f"Оценка риска — {risk}.")
             if result.get("recommendation"):
-                parts.append(f"Скоринговая рекомендация: {result['recommendation']}.")
+                recommendation = {
+                    "APPROVE": "положительная, но это не итоговое решение банка",
+                    "REVIEW": "нужно дополнительное рассмотрение",
+                    "DECLINE": "отрицательная, но это не итоговое решение банка",
+                    "REQUEST_INFO": "нужно запросить сведения",
+                }.get(result["recommendation"], "не сформирована")
+                parts.append(f"Рекомендация скоринга: {recommendation}.")
+            if issue_ids and result.get("recommendation") in {"DECLINE", "REVIEW"}:
+                parts.append("Факторы, повлиявшие на оценку: " + "; ".join(
+                    evidence_by_id[fact_id]["value"].rstrip(".; ") for fact_id in issue_ids[:2]
+                ) + ".")
             answer.summary = " ".join(parts) or "Сохранённая оценка сформирована; см. факты заявки и результаты проверок."
-            answer.summary_fact_ids = score_ids
+            answer.summary_fact_ids = (score_ids + issue_ids[:2])[:8]
         if not blocking_reasons and missing_fields:
             answer.recommendations = [AIRecommendation(
                 action="REQUEST_INFORMATION",
                 text="Запросить недостающие обязательные сведения, перечисленные в предупреждениях.",
                 fact_ids=[fact["id"] for fact in facts if fact["id"].startswith("data.missing.")][:6]
                     or answer.summary_fact_ids[:6],
+            )]
+        elif not blocking_reasons and result.get("recommendation") in {"DECLINE", "REVIEW"}:
+            issue_ids = [fact["id"] for fact in facts
+                         if fact["id"].startswith(("score.reason.", "score.factor."))]
+            answer.recommendations = [AIRecommendation(
+                action="VERIFY_DATA",
+                text=("Перепроверьте показатели, перечисленные среди факторов оценки. Если сведения актуальны, "
+                      "сотрудник может рассмотреть дальнейшие варианты в рамках правил банка."),
+                fact_ids=(issue_ids[:5] or answer.summary_fact_ids[:5]),
             )]
         elif not blocking_reasons:
             answer.recommendations = [AIRecommendation(

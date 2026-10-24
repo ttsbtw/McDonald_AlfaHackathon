@@ -289,7 +289,7 @@ def test_migration_matches_models_and_roundtrip(database_url):
     command.upgrade(config, "head")
     command.upgrade(config, "head")
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0007_alternative_offers"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0008_ai_analysis_records"
     engine.dispose()
 
 
@@ -356,7 +356,7 @@ def test_employee_ai_analysis_is_explanatory_and_audited(client, application, he
     response_payload = AIAnalysisOut(
         analysis_id=UUID(int=45), application_id=UUID(draft["id"]),
         analyzed_at=datetime.now(timezone.utc), model="qwen3:4b-instruct-2507-q4_K_M",
-        prompt_version="credit-score-explainer-v3", summary="Балл скоринга высокий.",
+        prompt_version="credit-score-explainer-v4", summary="Балл скоринга высокий.",
         summary_fact_ids=["score.score"], evidence=[AIEvidence(id="score.score", label="Балл", value="100")],
         recommendations=[AIRecommendation(action="CONTINUE_REVIEW", text="Продолжить рассмотрение.", fact_ids=["score.score"])],
         data_warnings=[], blocking_reasons=[], is_blocked=False, used_safe_fallback=False,
@@ -368,6 +368,9 @@ def test_employee_ai_analysis_is_explanatory_and_audited(client, application, he
     assert response.json()["application_id"] == draft["id"]
     assert response.json()["evidence"][0]["id"] == "score.score"
     assert calls == [draft["id"]]
+    persisted = client.get(f"/api/v1/bank/applications/{draft['id']}/ai-analysis", headers=employee_headers)
+    assert persisted.status_code == 200
+    assert persisted.json() == response.json()
     assert client.post(f"/api/v1/bank/applications/{draft['id']}/ai-analysis", headers=headers).status_code == 403
     queue_item = client.get(f"/api/v1/bank/applications/{draft['id']}", headers=employee_headers).json()
     assert queue_item["status"] == "UNDER_REVIEW"
@@ -376,8 +379,22 @@ def test_employee_ai_analysis_is_explanatory_and_audited(client, application, he
         log = session.scalar(select(AuditLog).where(AuditLog.event_type == "AI_SCORING_EXPLANATION"))
         assert log.application_id == UUID(draft["id"])
         assert log.payload["model"] == "qwen3:4b-instruct-2507-q4_K_M"
-        assert log.payload["prompt_version"] == "credit-score-explainer-v3"
+        assert log.payload["prompt_version"] == "credit-score-explainer-v4"
         assert "reasoning" not in json.dumps(log.payload).lower()
+
+    requested = client.post(f"/api/v1/bank/applications/{draft['id']}/request-info", headers=employee_headers,
+                            json={"comment": "Уточните финансовые показатели."})
+    assert requested.status_code == 200
+    assert client.get(f"/api/v1/bank/applications/{draft['id']}/ai-analysis",
+                      headers=employee_headers).json() is None
+    updated = client.patch(f"/api/v1/applications/{draft['id']}", headers=headers, json={
+        "revision": requested.json()["revision"], "average_monthly_revenue": "1200000.00",
+    })
+    assert updated.status_code == 200
+    assert client.post(f"/api/v1/applications/{draft['id']}/submit", headers=headers,
+                       json={"credit_history_consent": True}).status_code == 200
+    assert client.get(f"/api/v1/bank/applications/{draft['id']}/ai-analysis",
+                      headers=employee_headers).json() is None
 
 @pytest.mark.parametrize(("expenses", "existing_debt", "expected_score", "recommendation"), [
     ("600000.00", "50000.00", 100, "APPROVE"),

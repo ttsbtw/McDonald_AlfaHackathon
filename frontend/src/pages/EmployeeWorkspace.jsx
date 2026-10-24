@@ -5,7 +5,7 @@ import { Alert, Button, EmptyState, Field, Skeleton, StatusBadge, Toast } from "
 import { approvalBlockReason, latestComplianceReview, requiresComplianceReview } from "../domain/pipeline.js";
 
 const filters = ["", "UNDER_REVIEW", "NEEDS_INFO", "APPROVED", "REJECTED"];
-const recommendationLabels = { APPROVE: "Рекомендуется одобрить", REVIEW: "Нужно дополнительное рассмотрение", DECLINE: "Рекомендуется отказ", REQUEST_INFO: "Нужно запросить сведения" };
+const recommendationLabels = { APPROVE: "Положительная рекомендация скоринга", REVIEW: "Нужно дополнительное рассмотрение", DECLINE: "Отрицательная рекомендация скоринга", REQUEST_INFO: "Нужно запросить сведения" };
 const riskLabels = { LOW: "Низкий", MEDIUM: "Средний", HIGH: "Высокий", UNKNOWN: "Не определён" };
 const assessmentStatuses = { COMPLETED: "Оценка завершена", INSUFFICIENT_DATA: "Недостаточно данных" };
 const underwritingLabels = { PASS: "Проверки пройдены", REVIEW: "Нужна ручная проверка", REJECT: "Есть стоп-фактор" };
@@ -148,8 +148,11 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
     if (unavailable) return;
     if (!silent) { setLoading(true); setError(""); }
     try {
-      const [application, assessments, alternativeSet, auditLog] = await Promise.all([api.bankApplication(id), api.bankAssessments(id), api.bankAlternatives(id), api.bankAudit(id)]);
-      setRecord({ ...application, assessments }); setAlternatives(alternativeSet); setAudit(auditLog); setError("");
+      const [application, assessments, alternativeSet, auditLog, savedAiAnalysis] = await Promise.all([
+        api.bankApplication(id), api.bankAssessments(id), api.bankAlternatives(id), api.bankAudit(id), api.bankAIAnalysis(id),
+      ]);
+      setRecord({ ...application, assessments }); setAlternatives(alternativeSet); setAudit(auditLog);
+      setAiAnalysis(savedAiAnalysis); setError("");
     } catch (err) { setError(err.message); }
     finally { if (!silent) setLoading(false); }
   }
@@ -164,7 +167,10 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
     } catch (err) { setHistoryError(err.message); }
     finally { setHistoryLoading(false); setHistoryMoreLoading(false); }
   }
-  useEffect(() => { loadRecord(); }, [id, unavailable]);
+  useEffect(() => {
+    setAiAnalysis(null); setAiAnalysisError("");
+    loadRecord();
+  }, [id, unavailable]);
   useEffect(() => {
     if (record?.company?.id) loadHistory(record.company.id);
   }, [record?.company?.id, record?.status]);
@@ -204,7 +210,10 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
   async function analyzeScoring() {
     if (aiAnalysisBusy) return;
     setAiAnalysisBusy(true); setAiAnalysisError(""); setAiAnalysis(null);
-    try { setAiAnalysis(await api.analyzeBankScoring(id)); }
+    try {
+      setAiAnalysis(await api.analyzeBankScoring(id));
+      setToast({ id: Date.now(), message: "ИИ-анализ заявки готов", position: "center" });
+    }
     catch (err) { setAiAnalysisError(err.message || "Не удалось выполнить анализ. Повторите попытку."); }
     finally { setAiAnalysisBusy(false); }
   }
@@ -214,7 +223,10 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
     if (type === "approve" && approvalReason) { setError(approvalReason); return; }
     setBusy(true); setError("");
     try {
-      if (type === "info") await api.requestInfo(id, { comment: message });
+      if (type === "info") {
+        await api.requestInfo(id, { comment: message });
+        setAiAnalysis(null);
+      }
       else {
         await api.decide(id, { decision: type === "approve" ? "APPROVED" : "REJECTED", ...(message ? { comment: message } : {}) });
         setToast({ id: Date.now(), message: type === "approve" ? "Заявка одобрена" : "Заявка отклонена" });
@@ -248,7 +260,7 @@ function ApplicationReview({ id, navigate, onBack, unavailable }) {
     <AuditPanel id={id} audit={audit} onError={setError} />
   </main><aside className="panel sticky-card decision-card"><span className="eyebrow">Итоговое решение</span><h3>{reviewOpen ? "Следующее действие" : finalDecision ? "Рассмотрение завершено" : "Ожидаем клиента"}</h3>
     {!reviewOpen ? <><StatusBadge status={record.status} /><p className="muted">{finalDecision ? "Итог зафиксирован. Действия по заявке завершены." : "Банк запросил сведения. Действия снова станут доступны после ответа клиента."}</p></> : actionMode ? <><Field label={actionMode === "info" ? "Какие сведения нужно предоставить клиенту?" : "Комментарий к отказу — необязательно"}><textarea rows="5" maxLength="1000" value={comment} onChange={(event) => setComment(event.target.value)} autoFocus /></Field><Button busy={busy} onClick={() => action(actionMode)}>{actionMode === "info" ? "Отправить запрос" : "Подтвердить отказ"}</Button><Button disabled={busy} variant="ghost" onClick={() => { setActionMode(null); setComment(""); setError(""); }}>Отмена</Button></> : <><Button busy={busy} disabled={Boolean(approvalReason)} onClick={() => action("approve")}>Одобрить</Button>{approvalReason && <p className="decision-card__reason">{approvalReason}</p>}<Button busy={busy} variant="secondary" onClick={() => { setComment(""); setActionMode("info"); }}>Запросить сведения</Button><Button busy={busy} variant="ghost" onClick={() => { setComment(""); setActionMode("reject"); }}>Отказать</Button></>}
-  </aside></div>{toast && <Toast key={toast.id} message={toast.message} onClose={dismissToast} />}</div>;
+  </aside></div>{toast && <Toast key={toast.id} message={toast.message} position={toast.position || "right"} onClose={dismissToast} />}</div>;
 }
 
 function CompanyHistoryPanel({ items, total, loading, moreLoading, error, currentApplicationId, onOpen, onRetry, onLoadMore }) {
@@ -359,6 +371,7 @@ const aiActionLabels = {
 
 function AIAnalysisPanel({ result, loading, error, onAnalyze, hasAssessment }) {
   const evidenceById = Object.fromEntries((result?.evidence || []).map((fact) => [fact.id, fact]));
+  const mandatoryBlock = (result?.blocking_reasons || []).some((reason) => !reason.startsWith("Оценка неполная:"));
   return <section className="panel ai-analysis">
     <div className="panel-title"><div><span className="eyebrow eyebrow--red">Локальная Ollama</span><h2>Пояснение скоринга с помощью ИИ</h2><p>Анализ опирается на текущую оценку и не меняет баллы, проверки, статус или решение сотрудника.</p></div></div>
     <Button variant="secondary" busy={loading} disabled={!hasAssessment} onClick={onAnalyze}>
@@ -367,13 +380,15 @@ function AIAnalysisPanel({ result, loading, error, onAnalyze, hasAssessment }) {
     {error && <><Alert type="error" title="Не удалось выполнить анализ">{error}</Alert><Button variant="ghost" disabled={loading} onClick={onAnalyze}>Повторить анализ</Button></>}
     {loading && <p role="status" className="muted">Ожидаем ответ локальной модели. Повторный запуск заблокирован до завершения запроса.</p>}
     {result && <div className="ai-analysis__result">
-      <p className="ai-analysis__meta">Модель {result.model} · анализ {new Date(result.analyzed_at).toLocaleString("ru-RU")}</p>
-      {result.is_blocked && <Alert type="error" title="Выдача заблокирована обязательной проверкой">{result.blocking_reasons.join(" · ")} ИИ не может отменить это ограничение.</Alert>}
+      <p className="ai-analysis__meta">Последний анализ: {new Date(result.analyzed_at).toLocaleString("ru-RU")}</p>
+      {result.is_blocked && <Alert type={mandatoryBlock ? "error" : "info"}
+        title={mandatoryBlock ? "Есть ограничение обязательной проверки" : "Оценка неполная"}>
+        {result.blocking_reasons.join(" · ")} {mandatoryBlock ? "ИИ не может отменить это ограничение." : "Запросите сведения, указанные ниже, и обновите оценку."}
+      </Alert>}
       {result.used_safe_fallback && <Alert type="info" title="Показан проверенный пересказ">Текст модели содержал неподтверждённые формулировки. Здесь отображены только выводы, собранные backend из исходных фактов заявки.</Alert>}
-      <div className="ai-analysis__section"><h3>Краткое резюме</h3><p>{result.summary}</p><FactReferences ids={result.summary_fact_ids} evidence={evidenceById} /></div>
-      <div className="ai-analysis__section"><h3>Дальнейшее рассмотрение</h3>{result.recommendations.map((item, index) => <article key={`${item.action}-${index}`}><strong>{aiActionLabels[item.action] || "Рекомендация"}</strong><p>{item.text}</p><FactReferences ids={item.fact_ids} evidence={evidenceById} /></article>)}</div>
+      <div className="ai-analysis__section"><h3>Краткое резюме</h3><p>{localizeAiText(result.summary)}</p><FactReferences ids={result.summary_fact_ids} evidence={evidenceById} /></div>
+      <div className="ai-analysis__section"><h3>Дальнейшее рассмотрение</h3>{result.recommendations.map((item, index) => <article key={`${item.action}-${index}`}><strong>{aiActionLabels[item.action] || "Рекомендация"}</strong><p>{localizeAiText(item.text)}</p><FactReferences ids={item.fact_ids} evidence={evidenceById} /></article>)}</div>
       <div className="ai-analysis__section"><h3>Недостающие или противоречивые данные</h3>{result.data_warnings.length ? result.data_warnings.map((item, index) => <article key={index}><p>{item.text}</p><FactReferences ids={item.fact_ids} evidence={evidenceById} /></article>) : <p>Явных пропусков или противоречий в переданных фактах не указано.</p>}</div>
-      <small>Промпт {result.prompt_version} · идентификатор анализа {result.analysis_id}</small>
     </div>}
     {!hasAssessment && <p className="muted">Для анализа нужна сохранённая оценка заявки.</p>}
   </section>;
@@ -382,7 +397,37 @@ function AIAnalysisPanel({ result, loading, error, onAnalyze, hasAssessment }) {
 function FactReferences({ ids, evidence }) {
   const facts = ids.map((id) => evidence[id]).filter(Boolean);
   if (!facts.length) return null;
-  return <ul className="ai-analysis__facts">{facts.map((fact) => <li key={fact.id}><b>{fact.label}:</b> {fact.value}</li>)}</ul>;
+  return <ul className="ai-analysis__facts">{facts.map((fact) => <li key={fact.id}><b>{fact.label}:</b> {localizeAiFact(fact)}</li>)}</ul>;
+}
+
+const aiFactLabels = {
+  LOW: "низкий", MEDIUM: "средний", HIGH: "высокий", UNKNOWN: "не определён",
+  APPROVE: "положительная рекомендация скоринга, не итоговое решение", REVIEW: "нужно дополнительное рассмотрение",
+  DECLINE: "отрицательная рекомендация скоринга, не итоговое решение", REQUEST_INFO: "нужно запросить сведения",
+  PASS: "пройдена", FAIL: "не пройдена", CLEAR: "совпадений нет", AVAILABLE: "данные получены",
+  NO_HISTORY: "кредитной истории нет", UNAVAILABLE: "источник недоступен", ERROR: "техническая ошибка источника",
+  POTENTIAL_MATCH: "возможное совпадение", CONFIRMED_MATCH: "совпадение подтверждено",
+  COMPLETED: "оценка завершена", INSUFFICIENT_DATA: "недостаточно данных",
+};
+const aiRuleLabels = {
+  MIN_BUSINESS_AGE: "Срок работы бизнеса", PRODUCT_AMOUNT_LIMIT: "Сумма по условиям продукта",
+  DEBT_BURDEN: "Долговая нагрузка", BKI_HISTORY: "Кредитная история",
+  COMPLIANCE_CLEAR: "Проверка обязательных реестров", COMPLIANCE_CONFIRMED_MATCH: "Совпадение в обязательном реестре",
+  COMPLIANCE_POTENTIAL_MATCH: "Возможное совпадение в обязательном реестре",
+};
+
+function localizeAiFact(fact) {
+  if (fact.id.startsWith("underwriting.rule.")) {
+    const match = fact.value.match(/^([^:]+):\s*(PASS|REVIEW|REJECT)(.*)$/);
+    if (match) return `${aiRuleLabels[match[1]] || match[1]}: ${aiFactLabels[match[2]] || match[2]}${match[3]}`;
+  }
+  return aiFactLabels[fact.value] || reasonCodeLabels[fact.value] || fact.value;
+}
+
+function localizeAiText(text) {
+  const translations = { ...aiFactLabels, ...reasonCodeLabels };
+  const tokens = Object.keys(translations).sort((left, right) => right.length - left.length).join("|");
+  return text.replace(new RegExp(`\\b(${tokens})\\b`, "g"), (token) => translations[token] || token);
 }
 
 function AssessmentSummary({ assessment }) {

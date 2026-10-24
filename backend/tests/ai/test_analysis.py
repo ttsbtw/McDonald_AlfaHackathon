@@ -87,6 +87,11 @@ def test_valid_json_is_checked_and_has_only_used_source_facts(monkeypatch):
     assert captured["timeout"] == 1
     assert str(application.id) in captured["body"]["messages"][1]["content"]
     assert "Демо-компания" not in captured["body"]["messages"][1]["content"]
+    model_facts = json.loads(captured["body"]["messages"][1]["content"])["facts"]
+    assert next(fact["value"] for fact in model_facts if fact["id"] == "score.risk") == "низкий"
+    assert "положительная рекомендация скоринга" in next(
+        fact["value"] for fact in model_facts if fact["id"] == "score.recommendation"
+    )
 
 
 @pytest.mark.parametrize("content", ["not json", '{"summary":"no fields"}',
@@ -134,8 +139,28 @@ def test_mandatory_check_block_cannot_be_overridden_by_model(monkeypatch):
     result = analyze_with_ollama(application, company, assessment, settings())
     assert result.is_blocked is True
     assert result.blocking_reasons == ["COMPLIANCE_CONFIRMED_MATCH: Подтверждено совпадение обязательного реестра"]
+    assert "блокирует обязательная проверка" in result.summary
     assert result.recommendations[0].action == "REVIEW_REQUIRED"
     assert "заблокирована" in result.recommendations[0].text
+
+
+def test_incomplete_assessment_requests_missing_information_without_claiming_hard_stop(monkeypatch):
+    monkeypatch.setattr("app.ai_analysis.urlopen", lambda *_args, **_kwargs: FakeResponse(valid_content()))
+    assessment_result = {
+        "score": None, "risk_level": "UNKNOWN", "recommendation": "REQUEST_INFO",
+        "assessment_status": "INCOMPLETE", "hard_stops": [], "reasons": [],
+        "missing_fields": ["average_monthly_revenue"],
+        "check_reports": {"bki": {"status": "AVAILABLE"}, "compliance": {"status": "CLEAR"}},
+        "underwriting": {"status": "UNKNOWN", "rules": []},
+    }
+    application, company, assessment = fixture_application(assessment_result)
+    result = analyze_with_ollama(application, company, assessment, settings())
+
+    assert result.is_blocked is True
+    assert "запросите недостающие сведения" in result.summary.lower()
+    assert result.recommendations[0].action == "REQUEST_INFORMATION"
+    assert result.data_warnings[0].text == "Не заполнено обязательное поле: средняя месячная выручка."
+    assert result.blocking_reasons == ["Оценка неполная: нельзя завершить одобрение до получения недостающих данных."]
 
 
 def test_unsafe_model_text_is_replaced_with_source_fact_summary(monkeypatch):
@@ -152,8 +177,36 @@ def test_unsafe_model_text_is_replaced_with_source_fact_summary(monkeypatch):
     assert result.used_safe_fallback is True
     assert "подтверждает одобрение" not in result.summary
     assert "3000000" not in result.summary
+    assert "профиль выглядит сильным" in result.summary
+    assert "итоговое решение остаётся за сотрудником" in result.summary
     assert result.recommendations[0].action == "CONTINUE_REVIEW"
     assert set(result.summary_fact_ids).issubset({fact.id for fact in result.evidence})
+
+
+def test_low_score_fallback_explains_scoring_factors_and_safe_next_step(monkeypatch):
+    content = json.dumps({
+        "summary": "Заявку можно отклонить сразу.", "summary_fact_ids": ["score.score"],
+        "recommendations": [{"action": "CONTINUE_REVIEW", "text": "Отказать.", "fact_ids": ["score.score"]}],
+        "data_warnings": [],
+    })
+    monkeypatch.setattr("app.ai_analysis.urlopen", lambda *_args, **_kwargs: FakeResponse(content))
+    result_data = {
+        "score": 38, "risk_level": "HIGH", "recommendation": "DECLINE", "assessment_status": "COMPLETED",
+        "hard_stops": [], "reasons": [{"code": "EXCESSIVE_DEBT_BURDEN", "explanation": "Долговая нагрузка превышает лимит."}],
+        "factors": [{"code": "DEBT_BURDEN", "points": 0, "max_points": 20,
+                     "explanation": "Большая часть месячной прибыли уходит на платежи."}],
+        "check_reports": {"bki": {"status": "AVAILABLE"}, "compliance": {"status": "CLEAR"}},
+        "underwriting": {"status": "PASS", "rules": []},
+    }
+    application, company, assessment = fixture_application(result_data)
+    result = analyze_with_ollama(application, company, assessment, settings())
+    assert result.used_safe_fallback is True
+    assert "Долговая нагрузка превышает лимит" in result.summary
+    assert result.recommendations[0].action == "VERIFY_DATA"
+    assert "перепроверьте показатели" in result.recommendations[0].text.lower()
+    evidence = {fact.id for fact in result.evidence}
+    assert set(result.summary_fact_ids).issubset(evidence)
+    assert set(result.recommendations[0].fact_ids).issubset(evidence)
 
 
 def test_general_claim_that_all_checks_passed_requires_every_check_fact(monkeypatch):
