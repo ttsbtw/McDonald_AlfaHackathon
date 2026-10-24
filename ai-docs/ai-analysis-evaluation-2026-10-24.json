@@ -1,0 +1,452 @@
+{
+  "model": "qwen3:4b-instruct-2507-q4_K_M",
+  "cases": [
+    {
+      "case": "обычное рассмотрение",
+      "summary_source": "model",
+      "analysis": {
+        "analysis_id": "f4bf920b-bb93-4038-97de-ee279a078d5f",
+        "application_id": "00000000-0000-0000-0000-00000000006c",
+        "analyzed_at": "2026-10-24T14:29:42.045066Z",
+        "model": "qwen3:4b-instruct-2507-q4_K_M",
+        "prompt_version": "credit-score-explainer-v19",
+        "summary": "Запрошенная сумма 300 000 руб. на 12 месяцев для пополнения оборотных средств соответствует назначению продукта. Средняя выручка клиента — 1 000 000 руб./мес., что позволяет оценить стабильность доходов. Общая сумма текущих платежей в анкете и по БКИ составляет 50 000 руб./мес., и значения совпадают, что подтверждает согласованность данных. Скоринг показывает высокий балл (100/100), низкий риск и положительную рекомендацию, при этом все обязательные проверки пройдены, включая проверку истории и возраст бизнеса. Всё соответствует требованиям продукта и правилам underwriting.",
+        "summary_fact_ids": [
+          "app.amount",
+          "app.purpose",
+          "app.product",
+          "app.product_description",
+          "app.revenue",
+          "app.expenses",
+          "app.declared_debt",
+          "app.debt",
+          "score.score",
+          "score.risk",
+          "score.recommendation",
+          "bki.monthly_payment",
+          "data.payment_comparison",
+          "underwriting.rule.0",
+          "underwriting.rule.1",
+          "underwriting.rule.2",
+          "underwriting.rule.3",
+          "underwriting.rule.4"
+        ],
+        "evidence": [
+          {
+            "id": "app.amount",
+            "label": "Запрошенная сумма, руб.",
+            "value": "300000.00"
+          },
+          {
+            "id": "app.purpose",
+            "label": "Цель кредита",
+            "value": "Оборотные средства"
+          },
+          {
+            "id": "app.product",
+            "label": "Код продукта",
+            "value": "working_capital"
+          },
+          {
+            "id": "app.product_description",
+            "label": "Назначение продукта по описанию",
+            "value": "Пополнение оборотных средств"
+          },
+          {
+            "id": "app.revenue",
+            "label": "Средняя месячная выручка, руб.",
+            "value": "1000000.00"
+          },
+          {
+            "id": "app.expenses",
+            "label": "Средние месячные расходы, руб.",
+            "value": "600000.00"
+          },
+          {
+            "id": "app.declared_debt",
+            "label": "Платежи, указанные в анкете, руб./мес.",
+            "value": "50000.00"
+          },
+          {
+            "id": "app.debt",
+            "label": "Общая сумма текущих платежей, учтённая в скоринге, руб./мес.",
+            "value": "50000.00"
+          },
+          {
+            "id": "score.score",
+            "label": "Балл скоринга из 100",
+            "value": "100"
+          },
+          {
+            "id": "score.risk",
+            "label": "Оценка риска",
+            "value": "LOW"
+          },
+          {
+            "id": "score.recommendation",
+            "label": "Рекомендация скоринга",
+            "value": "APPROVE"
+          },
+          {
+            "id": "bki.monthly_payment",
+            "label": "Ежемесячный платёж по данным БКИ, руб./мес.",
+            "value": "50000.00"
+          },
+          {
+            "id": "data.payment_comparison",
+            "label": "Сверка платежей анкеты и БКИ",
+            "value": "Значения совпадают: анкета — 50 000 ₽/мес.; БКИ — 50 000 ₽/мес.. В скоринге учтено 50 000 ₽/мес. БКИ сверяется с общей суммой анкеты и не прибавляется к ней."
+          },
+          {
+            "id": "underwriting.rule.0",
+            "label": "Результат обязательного правила",
+            "value": "MIN_BUSINESS_AGE: PASS; Возраст бизнеса выше минимума."
+          },
+          {
+            "id": "underwriting.rule.1",
+            "label": "Результат обязательного правила",
+            "value": "PRODUCT_AMOUNT_LIMIT: PASS; Сумма в диапазоне продукта."
+          },
+          {
+            "id": "underwriting.rule.2",
+            "label": "Результат обязательного правила",
+            "value": "DEBT_BURDEN: PASS; Нагрузка в допустимом диапазоне."
+          },
+          {
+            "id": "underwriting.rule.3",
+            "label": "Результат обязательного правила",
+            "value": "BKI_HISTORY: PASS; История доступна."
+          },
+          {
+            "id": "underwriting.rule.4",
+            "label": "Результат обязательного правила",
+            "value": "COMPLIANCE_CLEAR: PASS; Совпадений нет."
+          }
+        ],
+        "recommendations": [
+          {
+            "action": "CONTINUE_REVIEW",
+            "text": "Передайте заявку сотруднику для итогового решения.",
+            "fact_ids": [
+              "app.amount",
+              "app.purpose",
+              "app.product",
+              "app.product_description",
+              "app.revenue",
+              "app.expenses"
+            ]
+          }
+        ],
+        "data_warnings": [],
+        "blocking_reasons": [],
+        "is_blocked": false,
+        "used_safe_fallback": false
+      }
+    },
+    {
+      "case": "высокий риск",
+      "summary_source": "model",
+      "analysis": {
+        "analysis_id": "65e271a0-c3de-4a3b-84de-ee9550e38614",
+        "application_id": "00000000-0000-0000-0000-000000000034",
+        "analyzed_at": "2026-10-24T14:30:05.882708Z",
+        "model": "qwen3:4b-instruct-2507-q4_K_M",
+        "prompt_version": "credit-score-explainer-v19",
+        "summary": "Запрашивается кредит на 300 000 руб. на 12 месяцев для пополнения оборотных средств. Средняя выручка составляет 1 000 000 руб./мес., расходы — 956 000 руб./мес., что даёт прибыльность 4,4%. Однако кредитные платежи в анкете и по БКИ равны нулю, и в скоринге учтены как 0 руб./мес. Скоринг показывает балл 43 (высокий риск), причём основные факторы — срок работы бизнеса (6 месяцев), прибыльность (4,4%) и долговая нагрузка (64,5%) — ниже порогов. Рекомендация скоринга — отрицательная из-за низкого балла, что связано с низкой прибыльностью и высокой нагрузкой на доход. Несмотря на отсутствие просрочек и прохождение обязательных проверок, продукт ориентирован на оборотные средства, а цель соответствует назначению, но нагрузка превышает допустимый уровень.",
+        "summary_fact_ids": [
+          "app.amount",
+          "app.revenue",
+          "app.expenses",
+          "finance.operating_profit",
+          "finance.operating_margin",
+          "app.declared_debt",
+          "app.debt",
+          "score.score",
+          "score.risk",
+          "score.reason.0",
+          "score.factor.BUSINESS_AGE",
+          "score.factor.OPERATING_MARGIN",
+          "score.factor.DEBT_BURDEN",
+          "finance.new_monthly_payment",
+          "finance.debt_burden",
+          "bki.monthly_payment",
+          "data.payment_comparison",
+          "underwriting.rule.2"
+        ],
+        "evidence": [
+          {
+            "id": "app.amount",
+            "label": "Запрошенная сумма, руб.",
+            "value": "300000.00"
+          },
+          {
+            "id": "app.revenue",
+            "label": "Средняя месячная выручка, руб.",
+            "value": "1000000.00"
+          },
+          {
+            "id": "app.expenses",
+            "label": "Средние месячные расходы, руб.",
+            "value": "956000.00"
+          },
+          {
+            "id": "app.declared_debt",
+            "label": "Платежи, указанные в анкете, руб./мес.",
+            "value": "0.00"
+          },
+          {
+            "id": "app.debt",
+            "label": "Общая сумма текущих платежей, учтённая в скоринге, руб./мес.",
+            "value": "0.00"
+          },
+          {
+            "id": "score.score",
+            "label": "Балл скоринга из 100",
+            "value": "43"
+          },
+          {
+            "id": "score.risk",
+            "label": "Оценка риска",
+            "value": "HIGH"
+          },
+          {
+            "id": "score.reason.0",
+            "label": "Причина скоринговой рекомендации",
+            "value": "Балл ниже порога рекомендации продукта."
+          },
+          {
+            "id": "score.factor.BUSINESS_AGE",
+            "label": "Фактор, повлиявший на скоринг",
+            "value": "5 из 20: Полных месяцев работы: 6; вклад 5 из 20."
+          },
+          {
+            "id": "score.factor.OPERATING_MARGIN",
+            "label": "Фактор, повлиявший на скоринг",
+            "value": "8 из 25: Доля выручки после операционных расходов — 4,4%; вклад 8 из 25."
+          },
+          {
+            "id": "score.factor.DEBT_BURDEN",
+            "label": "Фактор, повлиявший на скоринг",
+            "value": "10 из 35: Кредитные платежи относительно дохода после расходов — 64,5%; вклад 10 из 35."
+          },
+          {
+            "id": "finance.operating_profit",
+            "label": "Выручка за вычетом расходов по расчёту скоринга, руб./мес.",
+            "value": "44000.00"
+          },
+          {
+            "id": "finance.operating_margin",
+            "label": "Доля выручки за вычетом расходов, рассчитанная скорингом, %",
+            "value": "4.4"
+          },
+          {
+            "id": "finance.new_monthly_payment",
+            "label": "Расчётный платёж по запрашиваемому кредиту, руб./мес.",
+            "value": "28367.88"
+          },
+          {
+            "id": "finance.debt_burden",
+            "label": "Расчётная долговая нагрузка после нового кредита, %",
+            "value": "64.5"
+          },
+          {
+            "id": "bki.monthly_payment",
+            "label": "Ежемесячный платёж по данным БКИ, руб./мес.",
+            "value": "0.00"
+          },
+          {
+            "id": "data.payment_comparison",
+            "label": "Сверка платежей анкеты и БКИ",
+            "value": "Значения совпадают: анкета — 0 ₽/мес.; БКИ — 0 ₽/мес.. В скоринге учтено 0 ₽/мес. БКИ сверяется с общей суммой анкеты и не прибавляется к ней."
+          },
+          {
+            "id": "underwriting.rule.2",
+            "label": "Результат обязательного правила",
+            "value": "DEBT_BURDEN: PASS; Нагрузка в допустимом диапазоне."
+          }
+        ],
+        "recommendations": [
+          {
+            "action": "VERIFY_DATA",
+            "text": "Передайте заявку сотруднику для дополнительного рассмотрения.",
+            "fact_ids": [
+              "app.amount",
+              "app.revenue",
+              "app.expenses",
+              "finance.operating_profit",
+              "finance.operating_margin",
+              "app.declared_debt"
+            ]
+          }
+        ],
+        "data_warnings": [],
+        "blocking_reasons": [],
+        "is_blocked": false,
+        "used_safe_fallback": false
+      }
+    },
+    {
+      "case": "обязательная блокировка",
+      "summary_source": "backend_override",
+      "analysis": {
+        "analysis_id": "dd76f214-f8d2-428e-98ce-90ff020329eb",
+        "application_id": "00000000-0000-0000-0000-000000000067",
+        "analyzed_at": "2026-10-24T14:30:21.106575Z",
+        "model": "qwen3:4b-instruct-2507-q4_K_M",
+        "prompt_version": "credit-score-explainer-v19",
+        "summary": "Запрошено 300 000 ₽ на 12 месяцев; цель — Оборотные средства. Скоринг — 96 из 100, риск — низкий. Заявку блокирует обязательная проверка. Причина: Требуется разбор сотрудником. Завершите разбор по процедуре банка: ИИ не может снять ограничение.",
+        "summary_fact_ids": [
+          "app.amount",
+          "app.term",
+          "app.purpose",
+          "score.score",
+          "score.scale",
+          "score.risk",
+          "score.recommendation",
+          "underwriting.rule.0"
+        ],
+        "evidence": [
+          {
+            "id": "app.amount",
+            "label": "Запрошенная сумма, руб.",
+            "value": "300000.00"
+          },
+          {
+            "id": "app.term",
+            "label": "Срок, месяцев",
+            "value": "12"
+          },
+          {
+            "id": "app.purpose",
+            "label": "Цель кредита",
+            "value": "Оборотные средства"
+          },
+          {
+            "id": "score.score",
+            "label": "Балл скоринга из 100",
+            "value": "96"
+          },
+          {
+            "id": "score.scale",
+            "label": "Максимальный балл",
+            "value": "100"
+          },
+          {
+            "id": "score.risk",
+            "label": "Оценка риска",
+            "value": "LOW"
+          },
+          {
+            "id": "score.recommendation",
+            "label": "Рекомендация скоринга",
+            "value": "APPROVE"
+          },
+          {
+            "id": "underwriting.rule.0",
+            "label": "Результат обязательного правила",
+            "value": "COMPLIANCE_CONFIRMED_MATCH: REVIEW; Требуется разбор сотрудником"
+          }
+        ],
+        "recommendations": [
+          {
+            "action": "REVIEW_REQUIRED",
+            "text": "Завершите обязательную проверку по процедуре банка.",
+            "fact_ids": [
+              "app.amount",
+              "app.term",
+              "app.purpose",
+              "score.score",
+              "score.scale",
+              "score.risk"
+            ]
+          }
+        ],
+        "data_warnings": [],
+        "blocking_reasons": [
+          "COMPLIANCE_CONFIRMED_MATCH: Требуется разбор сотрудником"
+        ],
+        "is_blocked": true,
+        "used_safe_fallback": false
+      }
+    },
+    {
+      "case": "неполные данные",
+      "summary_source": "backend_override",
+      "analysis": {
+        "analysis_id": "7ab16f70-78a9-4251-8c47-009a2365d5ad",
+        "application_id": "00000000-0000-0000-0000-0000000001fe",
+        "analyzed_at": "2026-10-24T14:30:31.360955Z",
+        "model": "qwen3:4b-instruct-2507-q4_K_M",
+        "prompt_version": "credit-score-explainer-v19",
+        "summary": "Запрошено 300 000 ₽ на 12 месяцев; цель — Оборотные средства. Для завершения оценки запросите у клиента среднюю месячную выручку. После получения сведений оценка обновится.",
+        "summary_fact_ids": [
+          "app.amount",
+          "app.term",
+          "app.purpose",
+          "data.missing.0",
+          "score.risk",
+          "score.recommendation"
+        ],
+        "evidence": [
+          {
+            "id": "app.amount",
+            "label": "Запрошенная сумма, руб.",
+            "value": "300000.00"
+          },
+          {
+            "id": "app.term",
+            "label": "Срок, месяцев",
+            "value": "12"
+          },
+          {
+            "id": "app.purpose",
+            "label": "Цель кредита",
+            "value": "Оборотные средства"
+          },
+          {
+            "id": "score.risk",
+            "label": "Оценка риска",
+            "value": "UNKNOWN"
+          },
+          {
+            "id": "score.recommendation",
+            "label": "Рекомендация скоринга",
+            "value": "REQUEST_INFO"
+          },
+          {
+            "id": "data.missing.0",
+            "label": "Недостающее обязательное поле",
+            "value": "average_monthly_revenue"
+          }
+        ],
+        "recommendations": [
+          {
+            "action": "REQUEST_INFORMATION",
+            "text": "Запросите у клиента недостающие сведения.",
+            "fact_ids": [
+              "app.amount",
+              "app.term",
+              "app.purpose",
+              "data.missing.0",
+              "score.risk",
+              "score.recommendation"
+            ]
+          }
+        ],
+        "data_warnings": [
+          {
+            "text": "Не заполнено обязательное поле: средняя месячная выручка.",
+            "fact_ids": [
+              "data.missing.0"
+            ]
+          }
+        ],
+        "blocking_reasons": [
+          "Оценка неполная: нельзя завершить одобрение до получения недостающих данных."
+        ],
+        "is_blocked": true,
+        "used_safe_fallback": false
+      }
+    }
+  ]
+}

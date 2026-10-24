@@ -3,22 +3,30 @@
 
 import json
 import os
+from pathlib import Path
+import sys
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 from uuid import UUID
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from app.ai_analysis import InvalidModelAnswer, analyze_with_ollama
 
 
 def case(name, score, risk, recommendation, missing=(), stops=(), uw_status="PASS", rules=(),
-         reasons=(), factors=(), expenses="600000.00", debt="50000.00"):
+         reasons=(), factors=(), expenses="600000.00", debt="50000.00",
+         registration_date="2020-01-01", features=()):
     application_id = UUID(int=len(name) + score if isinstance(score, int) else len(name) + 500)
     application = SimpleNamespace(
         id=application_id, revision=2, requested_amount=Decimal("300000.00"), term_months=12,
         purpose="Оборотные средства", product_code="working_capital",
+        existing_monthly_debt_payment=Decimal(debt),
     )
-    company = SimpleNamespace(legal_form="OOO", registration_date=date(2020, 1, 1))
+    registration_date = date.fromisoformat(registration_date)
+    company = SimpleNamespace(legal_form="OOO", registration_date=registration_date)
+    product = SimpleNamespace(name="Оборотные средства", description="Пополнение оборотных средств")
     if not rules:
         rules = (
             {"code": "MIN_BUSINESS_AGE", "outcome": "PASS", "explanation": "Возраст бизнеса выше минимума."},
@@ -33,17 +41,20 @@ def case(name, score, risk, recommendation, missing=(), stops=(), uw_status="PAS
         input_snapshot={"input_data": {
             "product_code": "working_capital", "average_monthly_revenue": None if missing else "1000000.00",
             "average_monthly_operating_expenses": expenses, "existing_monthly_debt_payment": debt,
+            "registration_date": registration_date.isoformat(), "as_of_date": "2026-10-24",
         }, "checks": [{"source": "credit_history", "status": "PASS", "reason_code": "HISTORY_CLEAR"}]},
         result={
             "score": score, "risk_level": risk, "recommendation": recommendation,
             "assessment_status": "INCOMPLETE" if missing else "COMPLETED", "hard_stops": list(stops),
             "missing_fields": list(missing), "reasons": list(reasons), "factors": list(factors),
-            "check_reports": {"bki": {"status": "CLEAR", "current_overdue_amount": "0.00"},
+            "features": dict(features),
+            "check_reports": {"bki": {"status": "AVAILABLE", "monthly_payment": debt,
+                                       "current_overdue_amount": "0.00"},
                               "compliance": {"status": "CONFIRMED_MATCH" if uw_status == "REVIEW" else "CLEAR"}},
             "underwriting": {"status": "UNKNOWN" if missing else uw_status, "rules": list(rules)},
         },
     )
-    return application, company, assessment
+    return application, company, assessment, product
 
 
 def main():
@@ -53,12 +64,24 @@ def main():
         ollama_timeout_seconds=int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
     )
     cases = [
-        ("обычное рассмотрение", case("ordinary", 82, "LOW", "APPROVE"), False, False),
+        ("обычное рассмотрение", case("ordinary", 100, "LOW", "APPROVE"), False, False),
         ("высокий риск", case(
-            "high-risk", 38, "HIGH", "DECLINE", expenses="900000.00", debt="100000.00",
-            reasons=({"code": "EXCESSIVE_DEBT_BURDEN", "explanation": "Долговая нагрузка превышает лимит продукта."},),
-            factors=({"code": "DEBT_BURDEN", "points": 0, "max_points": 20,
-                      "explanation": "Долговые платежи занимают значительную часть прибыли."},),
+            "high-risk", 43, "HIGH", "DECLINE", expenses="956000.00", debt="0.00",
+            registration_date="2026-04-24",
+            reasons=({"code": "LOW_SCORE", "explanation": "Балл ниже порога рекомендации продукта."},),
+            factors=(
+                {"code": "BUSINESS_AGE", "points": 5, "max_points": 20,
+                 "explanation": "Полных месяцев работы: 6; вклад 5 из 20."},
+                {"code": "OPERATING_MARGIN", "points": 8, "max_points": 25,
+                 "explanation": "Доля выручки после операционных расходов — 4,4%; вклад 8 из 25."},
+                {"code": "DEBT_BURDEN", "points": 10, "max_points": 35,
+                 "explanation": "Кредитные платежи относительно дохода после расходов — 64,5%; вклад 10 из 35."},
+                {"code": "PAYMENT_HISTORY", "points": 20, "max_points": 20,
+                 "explanation": "Текущих просрочек нет; вклад 20 из 20."},
+            ),
+            features={"business_age_months": 6, "monthly_operating_profit": "44000.00",
+                      "operating_margin": "0.044", "new_monthly_payment": "28367.88",
+                      "total_monthly_debt_payment": "28367.88", "debt_burden": "0.6447245455"},
         ), False, False),
         ("обязательная блокировка", case("blocked", 96, "LOW", "APPROVE", uw_status="REVIEW",
             rules=({"code": "COMPLIANCE_CONFIRMED_MATCH", "outcome": "REVIEW", "reason": "Требуется разбор сотрудником"},)), True, False),
@@ -71,7 +94,8 @@ def main():
         if selected and selected != name:
             continue
         try:
-            result = analyze_with_ollama(*inputs, settings)
+            application, company, assessment, product = inputs
+            result = analyze_with_ollama(application, company, assessment, settings, product=product)
         except InvalidModelAnswer as error:
             detail = f"; число: {error.number}" if error.number else ""
             if os.getenv("AI_EVAL_DEBUG") and error.narrative:
@@ -89,7 +113,10 @@ def main():
             raise SystemExit(f"{name}: статус блокировки не совпал с обязательными проверками")
         if must_warn_missing and not result.data_warnings:
             raise SystemExit(f"{name}: отсутствует предупреждение о неполных данных")
-        report.append({"case": name, "analysis": result.model_dump(mode="json")})
+        summary_source = ("backend_override" if result.blocking_reasons else
+                          "backend_fallback" if result.used_safe_fallback else "model")
+        report.append({"case": name, "summary_source": summary_source,
+                       "analysis": result.model_dump(mode="json")})
     print(json.dumps({"model": settings.ollama_model, "cases": report}, ensure_ascii=False, indent=2))
 
 
