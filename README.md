@@ -13,7 +13,11 @@
 - Git;
 - Git LFS для загрузки весов модели из репозитория;
 - Ollama для локального запуска Qwen;
-- Python 3 для скрипта сборки файла модели;
+- Python 3.8+ для скрипта сборки файла модели.
+
+Вес модели — около 2,5 ГБ. Дополнительно понадобятся место для Git LFS-копии,
+временного объединённого GGUF-файла и импортированной модели Ollama, а также
+Docker-образов и базы. Размер скачивания не равен общему занятому месту на диске.
 
 Проверьте Docker и Compose:
 
@@ -21,6 +25,30 @@
 docker --version
 docker compose version
 ```
+
+#### Подготовка Linux (Ubuntu / Debian с systemd)
+
+Установите Docker Engine и Compose plugin по официальной инструкции для
+[Ubuntu](https://docs.docker.com/engine/install/ubuntu/) или
+[Debian](https://docs.docker.com/engine/install/debian/). Нужен Docker Engine
+20.10+ с поддержкой `host-gateway`; рекомендуется актуальная поддерживаемая версия.
+Старую отдельную команду `docker-compose` этот проект не использует.
+
+Установите остальные инструменты и запустите Docker:
+
+```sh
+sudo apt update
+sudo apt install -y git git-lfs python3 curl ca-certificates
+sudo systemctl enable --now docker
+sudo docker info
+sudo docker compose version
+python3 --version
+```
+
+Если обычный `docker info` сообщает `permission denied`, выполняйте приведённые
+далее команды Docker через `sudo docker …` из того же корня репозитория.
+Git, Python и Ollama запускайте от своего пользователя. Затем выполните шаги 1–5
+ниже, включая настройку службы Ollama для Linux в шаге 3.
 
 ### 1. Установите Git LFS и получите проект вместе с весами
 
@@ -43,18 +71,27 @@ git lfs pull
 ### 2. Установите Ollama и соберите модель
 
 Скачайте Ollama с [официальной страницы](https://ollama.com/download)
-ИЛИ
-воспользуйтесь этими командами:
+или воспользуйтесь командами установки:
 
-Для Linux/MacOS:
+Для Linux / macOS:
 ```sh
 curl -fsSL https://ollama.com/install.sh | sh
 ```
 Для Windows:
-```sh
+```powershell
 irm https://ollama.com/install.ps1 | iex
 ```
- и запустите приложение или службу Ollama. Оставьте её запущенной, пока используете ИИ-анализ.
+
+Запустите приложение или службу Ollama. На Linux с systemd:
+
+```sh
+sudo systemctl enable --now ollama
+systemctl is-active ollama
+curl --fail --show-error http://127.0.0.1:11434/api/tags
+```
+
+Ожидаются состояние `active` и JSON со списком моделей (до импорта он может быть
+пустым). Оставьте Ollama запущенной, пока используете ИИ-анализ.
 
 В терминале из корня репозитория восстановите единый файл модели и импортируйте его в Ollama:
 
@@ -112,7 +149,50 @@ OLLAMA_MODEL=qwen3:4b-instruct-2507-q4_K_M
 OLLAMA_TIMEOUT_SECONDS=120
 ```
 
-На macOS и Windows с Docker Desktop адрес `host.docker.internal` направляет backend-контейнер к Ollama на компьютере. На Linux укажите в `OLLAMA_BASE_URL` адрес Ollama, доступный из Docker-контейнера; `localhost` внутри backend-контейнера указывает на сам контейнер, а не на компьютер.
+Адрес `host.docker.internal` направляет backend-контейнер к Ollama на компьютере.
+В `compose.yaml` уже добавлено сопоставление `host.docker.internal:host-gateway`,
+в том числе для обычного Docker Engine на Linux. `localhost` внутри контейнера
+указывает на сам контейнер, а не на компьютер.
+
+#### Доступ к Ollama из Docker на Linux
+
+Для обычного Docker Engine с bridge-сетью Ollama должна слушать адрес, доступный
+контейнеру. По умолчанию она принимает подключения только на `127.0.0.1`.
+Откройте настройки службы:
+
+```sh
+sudo systemctl edit ollama.service
+```
+
+Добавьте в редактируемую часть файла и сохраните:
+
+```ini
+[Service]
+Environment="OLLAMA_HOST=0.0.0.0:11434"
+```
+
+Примените настройку:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl restart ollama
+systemctl is-active ollama
+curl --fail --show-error http://127.0.0.1:11434/api/tags
+```
+
+`OLLAMA_HOST` задаётся **службе Ollama**, а `OLLAMA_BASE_URL` — backend в `.env`.
+Добавление `OLLAMA_HOST` только в `.env` проекта не настроит службу.
+Значение `0.0.0.0` открывает прослушивание всех интерфейсов: ограничьте доступ к
+порту 11434 локальным компьютером и Docker-сетью в межсетевом экране; не открывайте
+его в интернет. При блокировке соединения разрешите входящие подключения к этому
+порту из подсети сети проекта, не отключая межсетевой экран целиком.
+Сведения о подсети можно посмотреть после запуска через `docker network ls` и
+`docker network inspect <имя_сети_проекта>`.
+
+Эти шаги рассчитаны на обычный Docker Engine и службу systemd. Для rootless Docker,
+Docker Desktop for Linux или Ollama на другом компьютере сетевой адрес может
+отличаться; задайте достижимый `OLLAMA_BASE_URL` и выполните проверку ниже.
+Подробности: [настройка службы Ollama](https://docs.ollama.com/faq#setting-environment-variables-on-linux).
 
 В `.env.example` уже заданы пароль PostgreSQL и настройки демонстрационных аккаунтов. Их можно оставить для локального прототипа. Если меняете `POSTGRES_PASSWORD`, используйте латинские буквы, цифры, `_` и `-`. Демонстрационные пароли предназначены только для локального запуска.
 
@@ -131,6 +211,23 @@ docker compose up --build -d
 ```sh
 docker compose ps
 ```
+
+Для `frontend`, `backend` и `db` дождитесь состояния `healthy`.
+После запуска проверьте соединение с моделью **из backend-контейнера**:
+
+```sh
+docker compose exec backend python -c "import json, os, urllib.request; url = os.environ['OLLAMA_BASE_URL'].rstrip('/') + '/api/tags'; data = json.load(urllib.request.urlopen(url, timeout=10)); names = [m['name'] for m in data['models']]; print('Модели Ollama:', names); expected = os.environ['OLLAMA_MODEL']; assert expected in names, 'Не найдена настроенная модель: ' + expected"
+```
+
+Команда должна вывести список с `qwen3:4b-instruct-2507-q4_K_M` и завершиться без
+ошибки. Это проверяет сеть и наличие модели; генерацию проверяет кнопка ИИ в шаге 5.
+При запуске без ИИ эту проверку пропустите.
+
+Backend по умолчанию ждёт ответ Ollama до 120 секунд. На медленном компьютере
+можно задать `OLLAMA_TIMEOUT_SECONDS=300` (максимум) в `.env` и повторить
+`docker compose up -d`. Nginx ждёт ответ API до 360 секунд, чтобы не обрывать
+ИИ-анализ раньше backend. После обновления `nginx.conf` нужна пересборка:
+`docker compose up --build -d frontend`.
 
 ### 5. Войдите и проверьте функции
 
@@ -170,7 +267,7 @@ docker compose up -d
 
 После обновления кода стоит пересобрать образы заново: `docker compose up --build -d`.
 
-PostgreSQL хранит данные в Docker-томе `postgres_data`. **Не запускайте `docker compose down -v`, если хотите сохранить данные**: флаг `-v` удаляет том с базой. Для полной очистки демонстрационных заявок обратитесь к [инструкции backend](backend/README.md).
+PostgreSQL хранит данные в Docker-томе `postgres_data`. **Не запускайте `docker compose down -v`, если хотите сохранить данные**: флаг `-v` удаляет том с базой. Для полной очистки демонстрационных заявок обратитесь к [инструкции сброса базы](backend/README.md#полный-сброс-демонстрационной-базы).
 
 ### Если приложение или ИИ-анализ не запускаются
 
@@ -180,6 +277,8 @@ PostgreSQL хранит данные в Docker-томе `postgres_data`. **Не 
 - **Порт уже занят.** Измените `FRONTEND_PORT` и/или `BACKEND_PORT` в `.env` и пересоздайте сервисы.
 - **Модель не найдена.** Проверьте `ollama list`, затем при необходимости выполните `git lfs pull` и повторите `python3 scripts/prepare_qwen3_model.py` (в Windows — `py scripts/prepare_qwen3_model.py`).
 - **Backend не соединяется с Ollama.** Убедитесь, что Ollama запущена и `OLLAMA_BASE_URL` указывает на адрес, доступный из контейнера. Подробные причины ошибок перечислены в [инструкции Ollama](ai-docs/ollama-ai-analysis.md#ошибки).
+- **На Linux Ollama работает на хосте, но недоступна из контейнера.** Проверьте `OLLAMA_HOST` в службе, перезапуск Ollama и правила межсетевого экрана; выполните проверку `/api/tags` из шага 4. Логи службы: `journalctl -u ollama -n 100 --no-pager`. После обновления Compose пересоздайте backend командой `docker compose up -d backend`.
+- **ИИ-анализ обрывается примерно через минуту с 504.** Пересоберите frontend командой `docker compose up --build -d frontend`, чтобы применить таймаут Nginx 360 секунд. Если ошибку возвращает backend после 120 секунд, проверьте логи Ollama и при необходимости увеличьте `OLLAMA_TIMEOUT_SECONDS` до 300.
 
 Подробная документация по API, демонстрационным данным и обработке заявок находится в [README backend](backend/README.md). Полное описание модели, её весов и проверочного набора — в [инструкции локального ИИ-анализа](ai-docs/ollama-ai-analysis.md).
 
