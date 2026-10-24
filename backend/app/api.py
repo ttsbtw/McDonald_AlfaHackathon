@@ -451,7 +451,7 @@ def employee_alternative_out(row):
     }
 
 
-def client_alternative_out(row):
+def client_alternative_out(row, is_needed=True):
     amount = Decimal(str(row.amount))
     monthly_payment = Decimal(str(row.monthly_payment))
     debt_burden = Decimal(str(row.debt_burden)) if row.debt_burden is not None else None
@@ -461,6 +461,7 @@ def client_alternative_out(row):
         "monthly_payment": format(monthly_payment, ".2f"),
         "debt_burden": format(debt_burden, ".8f") if debt_burden is not None else None,
         "reason": row.reason, "differences": row.differences, "status": row.status,
+        "is_needed": is_needed,
         "is_demo": True, "offered_at": row.offered_at.isoformat() if row.offered_at else None,
         "decided_at": row.decided_at.isoformat() if row.decided_at else None,
         "decision_comment": row.decision_comment,
@@ -642,7 +643,12 @@ def get_client_alternative_offer(application_id: UUID, db: DB, user: Client):
         AlternativeOffer.assessment_id == latest_assessment.id,
         AlternativeOffer.status.in_(["OFFERED", "ACCEPTED", "DECLINED"]),
     ).order_by(AlternativeOffer.offered_at.desc(), AlternativeOffer.id.desc()).limit(1))
-    return client_alternative_out(offer) if offer else None
+    if offer is None:
+        return None
+    result = latest_assessment.result or {}
+    underwriting = result.get("underwriting") or {}
+    is_needed = bool(result.get("hard_stops")) or underwriting.get("status") != "PASS" or result.get("recommendation") == "DECLINE"
+    return client_alternative_out(offer, is_needed=is_needed)
 
 
 @router.post("/applications/{application_id}/alternative-offers/{alternative_id}/decision",

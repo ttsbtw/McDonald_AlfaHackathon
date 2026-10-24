@@ -233,6 +233,7 @@ class ClientAlternativeOfferOut(APIModel):
     monthly_payment: Money
     debt_burden: Decimal | None
     reason: str
+    is_needed: bool = True
     differences: dict
     status: Literal["OFFERED", "ACCEPTED", "DECLINED"]
     is_demo: bool
