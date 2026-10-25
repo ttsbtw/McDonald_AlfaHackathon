@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "../api/client.js";
 import { Accordion } from "@alfalab/core-components-accordion";
 import { Alert, Button, EmptyState, Field, Skeleton, StatusBadge, Toast } from "../components/UI.jsx";
@@ -121,6 +121,7 @@ function NeedStep({ products, initial, onChange, onBack, onContinue }) {
   const [errors, setErrors] = useState({});
   const [searched, setSearched] = useState(false);
   const [focusedRange, setFocusedRange] = useState("");
+  const resultsRef = useRef(null);
   const matches = useMemo(() => products.map((product) => ({ product, fit: matchProduct(product, need) })), [products, need]);
   const amountMin = products.length ? Math.min(...products.map((product) => Number(product.min_amount))) : 300_000;
   const amountMax = products.length ? Math.max(...products.map((product) => Number(product.max_amount))) : 10_000_000;
@@ -141,11 +142,15 @@ function NeedStep({ products, initial, onChange, onBack, onContinue }) {
 
   function search(event) {
     event?.preventDefault();
-    const next = validateNeed(need); setErrors(next); setSearched(Object.keys(next).length === 0);
+    const next = validateNeed(need);
+    const isValid = Object.keys(next).length === 0;
+    setErrors(next);
+    setSearched(isValid);
+    if (isValid) window.requestAnimationFrame(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
   return <div className="content content--wide">
     <button className="back-link" onClick={onBack}>← К заявкам</button>
-    <ApplicationSteps active={1} /><div className="page-heading"><div><span className="eyebrow eyebrow--red">Этап 1 из 3 · Подбор</span><h1>Что нужно вашему бизнесу?</h1><p>Ответьте на три вопроса — покажем продукты, которые подходят по открытым условиям.</p></div><span className="big-number">01</span></div>
+    <ApplicationSteps active={1} /><div className="page-heading"><div><h1>Что нужно вашему бизнесу?</h1><p>Ответьте на три вопроса — покажем продукты, которые подходят по открытым условиям.</p></div><span className="big-number">01</span></div>
     <form className="need-grid" onSubmit={search}>
       <section className="panel panel--form">
         <h2>Цель финансирования</h2>
@@ -193,11 +198,11 @@ function NeedStep({ products, initial, onChange, onBack, onContinue }) {
             {errors.termMonths && <span className="form-error">{errors.termMonths}</span>}
           </div>
         </div>
-        <Button type="submit" onClick={search}>Подобрать продукты</Button>
+        <Button type="button" onClick={search}>Подобрать продукты</Button>
       </section>
       <aside className="need-aside"><div className="metric"><span>до</span><b>10 млн ₽</b><small>в демонстрационных продуктах</small></div><div className="metric"><span>решение</span><b>прозрачно</b><small>покажем причины рекомендации</small></div></aside>
     </form>
-    {searched && <section className="results"><div className="section-title"><div><span className="eyebrow">Результат подбора</span><h2>{matches.filter(({ fit }) => fit.matches).length ? "Нашли подходящие варианты" : "Точного совпадения нет"}</h2></div><span>{matches.filter(({ fit }) => fit.matches).length} из {matches.length}</span></div>
+    {searched && <section className="results" ref={resultsRef}><div className="section-title"><div><span className="eyebrow">Результат подбора</span><h2>{matches.filter(({ fit }) => fit.matches).length ? "Нашли подходящие варианты" : "Точного совпадения нет"}</h2></div><span>{matches.filter(({ fit }) => fit.matches).length} из {matches.length}</span></div>
       <div className="product-grid">{matches.map(({ product, fit }) => <article key={product.code} className={`product-card ${fit.matches ? "product-card--fit" : "product-card--muted"}`}><div className="product-card__top"><span>{fit.matches ? "Подходит" : "Не подходит"}</span><b>{product.annual_interest_rate}%*</b></div><h3>{product.name}</h3><p>{product.description}</p><dl><div><dt>Сумма</dt><dd>{formatMoney(product.min_amount)} — {formatMoney(product.max_amount)}</dd></div><div><dt>Срок</dt><dd>{product.min_term_months}–{product.max_term_months} мес.</dd></div></dl><ul>{(fit.matches ? fit.reasons : fit.blockers).map((text) => <li key={text}>{text}</li>)}</ul>{fit.matches && <Button onClick={() => onContinue(need, product)}>Выбрать продукт</Button>}<small>{product.rate_note}</small></article>)}</div>
     </section>}
   </div>;
@@ -226,12 +231,12 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
   const approvedDecision = status === "APPROVED";
   const flowStep = finalDecision || status === "UNDER_REVIEW" || status === "SUBMITTED" ? 3 : 2;
   const heading = finalDecision
-    ? { eyebrow: "Этап 3 из 3 · Решение", title: "Решение по заявке", number: "03" }
+    ? { title: "Решение по заявке", number: "03" }
     : status === "UNDER_REVIEW" || status === "SUBMITTED"
-      ? { eyebrow: "Этап 3 из 3 · Рассмотрение", title: "Заявка на рассмотрении", number: "03" }
+      ? { title: "Заявка на рассмотрении", number: "03" }
       : status === "NEEDS_INFO"
-        ? { eyebrow: "Этап 2 из 3 · Требуется уточнение", title: "Дополните заявку", number: "02" }
-        : { eyebrow: "Этап 2 из 3 · Заявка", title: saved ? "Заявка" : "Расскажите о бизнесе", number: "02" };
+        ? { title: "Дополните заявку", number: "02" }
+        : { title: saved ? "Заявка" : "Расскажите о бизнесе", number: "02" };
   const creditHints = useMemo(() => getCreditHints(form, product), [form, product]);
   const amountMin = Number(product?.min_amount ?? 300_000);
   const amountMax = Number(product?.max_amount ?? 10_000_000);
@@ -381,7 +386,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
     } finally { setBusy(false); }
   }
 
-  return <div className="content content--form"><button className="back-link" onClick={onClose}>← К заявкам</button><ApplicationSteps active={flowStep} /><div className="page-heading"><div><span className="eyebrow eyebrow--red">{heading.eyebrow}</span><h1>{heading.title}</h1>{saved && <><StatusBadge status={status} />{alternativeOffer?.status === "OFFERED" && <span className="status status--offer">Нужно ваше решение</span>}</>}<p>{readOnly ? (status === "APPROVED" ? "Заявка одобрена. Ниже сохранены итог и данные отправленной анкеты." : status === "REJECTED" ? "По заявке принято решение об отказе. Ниже сохранены данные отправленной анкеты." : "Заявка отправлена и ожидает решения. Изменения пока недоступны.") : "Известные банку сведения уже заполнены. Добавьте только показатели для оценки."}</p></div><span className="big-number">{heading.number}</span></div>
+  return <div className="content content--form"><button className="back-link" onClick={onClose}>← К заявкам</button><ApplicationSteps active={flowStep} /><div className="page-heading"><div><h1>{heading.title}</h1>{saved && <><StatusBadge status={status} />{alternativeOffer?.status === "OFFERED" && <span className="status status--offer">Нужно ваше решение</span>}</>}<p>{readOnly ? (status === "APPROVED" ? "Заявка одобрена. Ниже сохранены итог и данные отправленной анкеты." : status === "REJECTED" ? "По заявке принято решение об отказе. Ниже сохранены данные отправленной анкеты." : "Заявка отправлена и ожидает решения. Изменения пока недоступны.") : "Известные банку сведения уже заполнены. Добавьте только показатели для оценки."}</p></div><span className="big-number">{heading.number}</span></div>
     {notice && <Alert type={noticeType}>{notice}</Alert>}
     {status === "NEEDS_INFO" && <Alert title="Банк запросил уточнения">{infoRequest.loading ? "Загружаем сообщение сотрудника…" : infoRequest.error ? `Не удалось загрузить сообщение: ${infoRequest.error}` : infoRequest.message || "В истории нет текста запроса. Свяжитесь с сотрудником банка, чтобы уточнить, какие сведения нужно добавить."}</Alert>}
     {status === "REJECTED" && <Alert title="Комментарий банка">{infoRequest.loading ? "Загружаем сообщение сотрудника…" : infoRequest.error ? `Не удалось загрузить сообщение: ${infoRequest.error}` : infoRequest.message || "Сотрудник не добавил комментарий к решению."}</Alert>}
