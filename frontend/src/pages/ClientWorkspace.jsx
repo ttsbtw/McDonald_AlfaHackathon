@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "../api/client.js";
 import { Accordion } from "@alfalab/core-components-accordion";
 import { Alert, Button, EmptyState, Field, Skeleton, StatusBadge, Toast } from "../components/UI.jsx";
@@ -121,6 +121,7 @@ function NeedStep({ products, initial, onChange, onBack, onContinue }) {
   const [errors, setErrors] = useState({});
   const [searched, setSearched] = useState(false);
   const [focusedRange, setFocusedRange] = useState("");
+  const resultsRef = useRef(null);
   const matches = useMemo(() => products.map((product) => ({ product, fit: matchProduct(product, need) })), [products, need]);
   const amountMin = products.length ? Math.min(...products.map((product) => Number(product.min_amount))) : 300_000;
   const amountMax = products.length ? Math.max(...products.map((product) => Number(product.max_amount))) : 10_000_000;
@@ -141,11 +142,15 @@ function NeedStep({ products, initial, onChange, onBack, onContinue }) {
 
   function search(event) {
     event?.preventDefault();
-    const next = validateNeed(need); setErrors(next); setSearched(Object.keys(next).length === 0);
+    const next = validateNeed(need);
+    const isValid = Object.keys(next).length === 0;
+    setErrors(next);
+    setSearched(isValid);
+    if (isValid) window.requestAnimationFrame(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
   return <div className="content content--wide">
     <button className="back-link" onClick={onBack}>← К заявкам</button>
-    <ApplicationSteps active={1} /><div className="page-heading"><div><span className="eyebrow eyebrow--red">Этап 1 из 3 · Подбор</span><h1>Что нужно вашему бизнесу?</h1><p>Ответьте на три вопроса — покажем продукты, которые подходят по открытым условиям.</p></div><span className="big-number">01</span></div>
+    <ApplicationSteps active={1} /><div className="page-heading"><div><h1>Что нужно вашему бизнесу?</h1><p>Ответьте на три вопроса — покажем продукты, которые подходят по открытым условиям.</p></div><span className="big-number">01</span></div>
     <form className="need-grid" onSubmit={search}>
       <section className="panel panel--form">
         <h2>Цель финансирования</h2>
@@ -193,12 +198,12 @@ function NeedStep({ products, initial, onChange, onBack, onContinue }) {
             {errors.termMonths && <span className="form-error">{errors.termMonths}</span>}
           </div>
         </div>
-        <Button type="submit" onClick={search}>Подобрать продукты</Button>
+        <Button type="button" onClick={search}>Подобрать продукты</Button>
       </section>
-      <aside className="need-aside"><div className="metric"><span>до</span><b>10 млн ₽</b><small>в демонстрационных продуктах</small></div><div className="metric"><span>решение</span><b>прозрачно</b><small>покажем причины рекомендации</small></div></aside>
+      <aside className="need-aside"><section className="selection-summary"><span className="eyebrow">Подбор кредита</span><h2>Сводка подбора</h2><p>Сравним вашу цель, сумму и срок с условиями доступных продуктов.</p><div className="selection-summary__limit"><span>Сумма по продуктам</span><b>до 10 млн ₽</b><small>в демонстрационных предложениях</small></div><div className="selection-summary__note"><span aria-hidden="true">✓</span><p>Покажем, почему каждый вариант подходит или не подходит.</p></div></section></aside>
     </form>
-    {searched && <section className="results"><div className="section-title"><div><span className="eyebrow">Результат подбора</span><h2>{matches.filter(({ fit }) => fit.matches).length ? "Нашли подходящие варианты" : "Точного совпадения нет"}</h2></div><span>{matches.filter(({ fit }) => fit.matches).length} из {matches.length}</span></div>
-      <div className="product-grid">{matches.map(({ product, fit }) => <article key={product.code} className={`product-card ${fit.matches ? "product-card--fit" : "product-card--muted"}`}><div className="product-card__top"><span>{fit.matches ? "Подходит" : "Не подходит"}</span><b>{product.annual_interest_rate}%*</b></div><h3>{product.name}</h3><p>{product.description}</p><dl><div><dt>Сумма</dt><dd>{formatMoney(product.min_amount)} — {formatMoney(product.max_amount)}</dd></div><div><dt>Срок</dt><dd>{product.min_term_months}–{product.max_term_months} мес.</dd></div></dl><ul>{(fit.matches ? fit.reasons : fit.blockers).map((text) => <li key={text}>{text}</li>)}</ul>{fit.matches && <Button onClick={() => onContinue(need, product)}>Выбрать продукт</Button>}<small>{product.rate_note}</small></article>)}</div>
+    {searched && <section className="results" ref={resultsRef}><div className="section-title"><div><span className="eyebrow">Результат подбора</span><h2>{matches.filter(({ fit }) => fit.matches).length ? "Нашли подходящие варианты" : "Точного совпадения нет"}</h2></div><span className="results-count"><b>{matches.filter(({ fit }) => fit.matches).length}</b><span>из {matches.length} продуктов подходят</span></span></div>
+      <div className="product-grid">{matches.map(({ product, fit }) => <article key={product.code} className={`product-card ${fit.matches ? "product-card--fit" : "product-card--muted"}`}><div className="product-card__top"><span>{fit.matches ? "Подходит" : "Не подходит"}</span><b>{product.annual_interest_rate}%</b></div><h3>{product.name}</h3><p>{product.description}</p><dl><div><dt>Сумма</dt><dd>{formatMoney(product.min_amount)} — {formatMoney(product.max_amount)}</dd></div><div><dt>Срок</dt><dd>{product.min_term_months}–{product.max_term_months} мес.</dd></div></dl><ul>{(fit.matches ? fit.reasons : fit.blockers).map((text) => <li key={text}>{text}</li>)}</ul>{fit.matches && <Button onClick={() => onContinue(need, product)}>Выбрать продукт</Button>}</article>)}</div>
     </section>}
   </div>;
 }
@@ -226,12 +231,12 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
   const approvedDecision = status === "APPROVED";
   const flowStep = finalDecision || status === "UNDER_REVIEW" || status === "SUBMITTED" ? 3 : 2;
   const heading = finalDecision
-    ? { eyebrow: "Этап 3 из 3 · Решение", title: "Решение по заявке", number: "03" }
+    ? { title: "Решение по заявке", number: "03" }
     : status === "UNDER_REVIEW" || status === "SUBMITTED"
-      ? { eyebrow: "Этап 3 из 3 · Рассмотрение", title: "Заявка на рассмотрении", number: "03" }
+      ? { title: "Заявка на рассмотрении", number: "03" }
       : status === "NEEDS_INFO"
-        ? { eyebrow: "Этап 2 из 3 · Требуется уточнение", title: "Дополните заявку", number: "02" }
-        : { eyebrow: "Этап 2 из 3 · Заявка", title: saved ? "Заявка" : "Расскажите о бизнесе", number: "02" };
+        ? { title: "Дополните заявку", number: "02" }
+        : { title: saved ? "Заявка" : "Расскажите о бизнесе", number: "02" };
   const creditHints = useMemo(() => getCreditHints(form, product), [form, product]);
   const amountMin = Number(product?.min_amount ?? 300_000);
   const amountMax = Number(product?.max_amount ?? 10_000_000);
@@ -381,7 +386,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
     } finally { setBusy(false); }
   }
 
-  return <div className="content content--form"><button className="back-link" onClick={onClose}>← К заявкам</button><ApplicationSteps active={flowStep} /><div className="page-heading"><div><span className="eyebrow eyebrow--red">{heading.eyebrow}</span><h1>{heading.title}</h1>{saved && <><StatusBadge status={status} />{alternativeOffer?.status === "OFFERED" && <span className="status status--offer">Нужно ваше решение</span>}</>}<p>{readOnly ? (status === "APPROVED" ? "Заявка одобрена. Ниже сохранены итог и данные отправленной анкеты." : status === "REJECTED" ? "По заявке принято решение об отказе. Ниже сохранены данные отправленной анкеты." : "Заявка отправлена и ожидает решения. Изменения пока недоступны.") : "Известные банку сведения уже заполнены. Добавьте только показатели для оценки."}</p></div><span className="big-number">{heading.number}</span></div>
+  return <div className="content content--form"><button className="back-link" onClick={onClose}>← К заявкам</button><ApplicationSteps active={flowStep} /><div className="page-heading"><div><h1>{heading.title}</h1>{saved && <><StatusBadge status={status} />{alternativeOffer?.status === "OFFERED" && <span className="status status--offer">Нужно ваше решение</span>}</>}<p>{readOnly ? (status === "APPROVED" ? "Заявка одобрена. Ниже сохранены итог и данные отправленной анкеты." : status === "REJECTED" ? "По заявке принято решение об отказе. Ниже сохранены данные отправленной анкеты." : "Заявка отправлена и ожидает решения. Изменения пока недоступны.") : "Известные банку сведения уже заполнены. Добавьте только показатели для оценки."}</p></div><span className="big-number">{heading.number}</span></div>
     {notice && <Alert type={noticeType}>{notice}</Alert>}
     {status === "NEEDS_INFO" && <Alert title="Банк запросил уточнения">{infoRequest.loading ? "Загружаем сообщение сотрудника…" : infoRequest.error ? `Не удалось загрузить сообщение: ${infoRequest.error}` : infoRequest.message || "В истории нет текста запроса. Свяжитесь с сотрудником банка, чтобы уточнить, какие сведения нужно добавить."}</Alert>}
     {status === "REJECTED" && <Alert title="Комментарий банка">{infoRequest.loading ? "Загружаем сообщение сотрудника…" : infoRequest.error ? `Не удалось загрузить сообщение: ${infoRequest.error}` : infoRequest.message || "Сотрудник не добавил комментарий к решению."}</Alert>}
@@ -414,7 +419,7 @@ function Editor({ application, product, company, need, formSnapshot, onFormChang
           </>}
         </section>
       </div>
-      <aside className="application-aside"><div className="panel sticky-card">{readOnly ? <><span className="eyebrow">{finalDecision ? "Решение банка" : "Заявка отправлена"}</span><h3>{status === "APPROVED" ? "Кредит одобрен" : status === "REJECTED" ? "Заявка отклонена" : "Заявка на рассмотрении"}</h3><p className="muted">{finalDecision ? "Изменить или отправить эту заявку повторно нельзя." : "Пока заявка рассматривается, редактирование и повторная отправка недоступны."}</p></> : <><span className="eyebrow">Перед отправкой</span><h3>Что произойдёт дальше</h3><ol><li>Проверим полноту анкеты</li><li>Выполним локальные проверки</li><li>Передадим сотруднику банка</li></ol><label className="consent-field"><input type="checkbox" checked={creditHistoryConsent} onChange={(event) => setCreditHistoryConsent(event.target.checked)} /><span>Согласен на запрос синтетической кредитной истории для проверки заявки.</span></label><Accordion className="consent-info" containerClassName="consent-info__trigger" headerClassName="consent-info__header" bodyContentClassName="consent-info__content" header="Зачем нужно согласие?">С согласия будет запрошена демо-кредитная история, а её результат попадёт в проверки заявки. Без согласия проверка будет отмечена как недоступная и может ограничить решение и подбор альтернативных условий.</Accordion><Button type="button" variant="secondary" onClick={save} busy={busy}>Сохранить черновик</Button><Button type="button" onClick={submit} busy={busy}>Отправить заявку</Button>{saved?.status === "DRAFT" && <Button type="button" variant="ghost" busy={busy} onClick={deleteDraft}>Удалить черновик</Button>}</>}</div></aside>
+      <aside className="application-aside"><div className="panel sticky-card">{readOnly ? <><span className="eyebrow">{finalDecision ? "Решение банка" : "Заявка отправлена"}</span><h3>{status === "APPROVED" ? "Кредит одобрен" : status === "REJECTED" ? "Заявка отклонена" : "Заявка на рассмотрении"}</h3><p className="muted">{finalDecision ? "Изменить или отправить эту заявку повторно нельзя." : "Пока заявка рассматривается, редактирование и повторная отправка недоступны."}</p></> : <><span className="eyebrow">Перед отправкой</span><h3>Что произойдёт дальше</h3><ol><li>Проверим полноту анкеты</li><li>Выполним локальные проверки</li><li>Передадим сотруднику банка</li></ol><label className="consent-field"><input type="checkbox" checked={creditHistoryConsent} onChange={(event) => setCreditHistoryConsent(event.target.checked)} /><span>Согласен на запрос синтетической кредитной истории для проверки заявки.</span></label><Accordion className="consent-info" containerClassName="consent-info__trigger" headerClassName="consent-info__header" bodyContentClassName="consent-info__content" header={<span className="consent-info__text">Зачем нужно согласие?</span>}><span className="consent-info__text">С согласия будет запрошена демо-кредитная история, а её результат попадёт в проверки заявки. Без согласия проверка будет отмечена как недоступная и может ограничить решение и подбор альтернативных условий.</span></Accordion><Button type="button" variant="secondary" onClick={save} busy={busy}>Сохранить черновик</Button><Button type="button" onClick={submit} busy={busy}>Отправить заявку</Button>{saved?.status === "DRAFT" && <Button type="button" variant="ghost" busy={busy} onClick={deleteDraft}>Удалить черновик</Button>}</>}</div></aside>
     </form>
   </div>;
 }
