@@ -322,9 +322,9 @@ a { color: inherit; }
 .review-value b { color: var(--red); font-size: 13px; }
 .review-value strong { color: #315f20; }
 .decision-overview, .checks-panel, .compliance-review, .audit-panel { display: flex; flex-direction: column; gap: 22px; }
-.decision-overview__grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 11px; }
+.decision-overview__grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 11px; }
 .decision-overview__grid article { min-height: 150px; padding: 18px; border-radius: 15px; display: flex; flex-direction: column; gap: 10px; background: #f5f5f2; }
-.decision-overview__grid article:nth-child(2) { color: #fff; background: var(--ink); }
+.decision-overview__grid .decision-overview__recommendation { color: #fff; background: var(--ink); }
 .decision-overview__grid article.is-positive { color: #315f20; background: #f0fae8; }
 .decision-overview__grid article.is-negative { color: #8b2019; background: #fff0ee; }
 .decision-overview__grid small { color: inherit; opacity: .62; font-size: 9px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
