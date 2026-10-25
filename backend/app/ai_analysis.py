@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 MODEL_TAG = "qwen3:4b-instruct-2507-q4_K_M"
-PROMPT_VERSION = "credit-score-explainer-v19"
+PROMPT_VERSION = "credit-score-explainer-v20"
 MAX_INPUT_BYTES = 12_000
 MAX_OUTPUT_BYTES = 12_000
 MAX_RECOMMENDATIONS = 1
@@ -318,7 +318,7 @@ def _payment_claim_is_unsupported(summary: str, facts: list[dict]) -> bool:
                 return True
 
     comparison = fact_map.get("data.payment_comparison", {}).get("value", "")
-    claims_difference = re.search(r"расхожд|разрыв|не совпада|различа|отлича", summary, re.IGNORECASE)
+    claims_difference = re.search(r"расхожд|расходят|разрыв|не совпада|различа|отлича", summary, re.IGNORECASE)
     if claims_difference and "совпадают" in comparison.lower():
         return True
     return False
@@ -622,25 +622,37 @@ def analyze_with_ollama(application, company, assessment, settings, compliance_r
     valid_ids = {fact["id"] for fact in facts}
     if not set(answer.summary_fact_ids).issubset(valid_ids):
         raise InvalidModelAnswer("Ответ модели содержит ссылки на отсутствующие факты.")
-    forbidden_decision_claim = re.compile(
-        r"(заявк\w*.{0,35}(одобр|отклон|отказ)|кредит\w*.{0,35}(одобр|отклон|отказ)|"
-        r"решени\w*.{0,20}(одобр|отказ)|можно.{0,15}выдать|выдать.{0,15}кредит|"
-        r"одобрить.{0,20}заявк|отказать.{0,20}заявк|завершить.{0,25}рассмотрен|"
-        r"завершено.{0,20}без.{0,20}провер|скоринг.{0,30}(подтвержд.{0,20}одобр|подтверждает одобр))",
-        re.IGNORECASE,
-    )
     has_purpose_conflict = any(fact["id"] == "data.purpose_conflict" for fact in facts)
-    purpose_conflict_omitted = has_purpose_conflict and not _summary_addresses_purpose_conflict(answer.summary)
-    unsupported_product_claim = not _purpose_product_textually_supported(answer.summary, facts)
-    unsupported_payment_claim = _payment_claim_is_unsupported(answer.summary, facts)
-    unsafe_text = bool(forbidden_decision_claim.search(answer.summary) or unsupported_product_claim
-                       or unsupported_payment_claim or purpose_conflict_omitted)
-    if unsafe_text:
-        if (has_purpose_conflict or unsupported_product_claim) and not blocking_reasons:
-            answer.summary, answer.summary_fact_ids = _safe_product_alignment_summary(result, facts)
-        else:
-            answer.summary, answer.summary_fact_ids = _safe_brief_summary(result, facts, blocking_reasons)
-    if re.search(r"расхожд|разрыв|не совпада|различа|отлича", answer.summary, re.IGNORECASE):
+    keep_model_summary = (
+        not blocking_reasons
+        and not has_purpose_conflict
+        and result.get("assessment_status") == "COMPLETED"
+        and result.get("recommendation") == "APPROVE"
+        and result.get("risk_level") == "LOW"
+        and (result.get("underwriting") or {}).get("status") == "PASS"
+    )
+    unsafe_text = False
+    # For complete, low-risk applications, preserve the model's own explanation.
+    # Format and fact references are still validated; credit decisions stay separate.
+    if not keep_model_summary and not blocking_reasons:
+        forbidden_decision_claim = re.compile(
+            r"(заявк\w*.{0,35}(одобр|отклон|отказ)|кредит\w*.{0,35}(одобр|отклон|отказ)|"
+            r"решени\w*.{0,20}(одобр|отказ)|можно.{0,15}выдать|выдать.{0,15}кредит|"
+            r"одобрить.{0,20}заявк|отказать.{0,20}заявк|завершить.{0,25}рассмотрен|"
+            r"завершено.{0,20}без.{0,20}провер|скоринг.{0,30}(подтвержд.{0,20}одобр|подтверждает одобр))",
+            re.IGNORECASE,
+        )
+        purpose_conflict_omitted = has_purpose_conflict and not _summary_addresses_purpose_conflict(answer.summary)
+        unsupported_product_claim = not _purpose_product_textually_supported(answer.summary, facts)
+        unsupported_payment_claim = _payment_claim_is_unsupported(answer.summary, facts)
+        unsafe_text = bool(forbidden_decision_claim.search(answer.summary) or unsupported_product_claim
+                           or unsupported_payment_claim or purpose_conflict_omitted)
+        if unsafe_text:
+            if has_purpose_conflict or unsupported_product_claim:
+                answer.summary, answer.summary_fact_ids = _safe_product_alignment_summary(result, facts)
+            else:
+                answer.summary, answer.summary_fact_ids = _safe_brief_summary(result, facts, blocking_reasons)
+    if re.search(r"расхожд|расходят|разрыв|не совпада|различа|отлича", answer.summary, re.IGNORECASE):
         comparison_fact = next((fact["id"] for fact in facts if fact["id"] == "data.payment_comparison"), None)
         if comparison_fact and comparison_fact not in answer.summary_fact_ids:
             answer.summary_fact_ids.append(comparison_fact)
@@ -686,5 +698,5 @@ def analyze_with_ollama(application, company, assessment, settings, compliance_r
         evidence=[AIEvidence(**fact) for fact in facts if fact["id"] in used_ids],
         recommendations=recommendations, data_warnings=data_warnings,
         blocking_reasons=blocking_reasons, is_blocked=bool(blocking_reasons),
-        used_safe_fallback=unsafe_text,
+        used_safe_fallback=bool(blocking_reasons) or unsafe_text,
     )

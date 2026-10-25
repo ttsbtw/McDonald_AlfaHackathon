@@ -375,9 +375,10 @@ function AIAnalysisPanel({ result, loading, error, onAnalyze, hasAssessment, ina
     {loading && !inactive && <p role="status" className="muted">Ожидаем ответ локальной модели. Повторный запуск заблокирован до завершения запроса.</p>}
     {result && <div className="ai-analysis__result">
       <p className="ai-analysis__meta">Последний анализ: {new Date(result.analyzed_at).toLocaleString("ru-RU")}</p>
+      <p className="muted">{result.used_safe_fallback ? "Ответ модели заменён пояснением по правилам системы." : "Текст модели без автоматической замены. Выводы необходимо сверить с данными заявки."}</p>
       <div className={`ai-analysis__brief${mandatoryBlock ? " ai-analysis__brief--blocked" : ""}`}>
         <h3>{mandatoryBlock ? "Обязательное ограничение" : "Кратко о заявке"}</h3>
-        <p>{localizeAiText(result.summary)}</p>
+        <p>{result.used_safe_fallback ? localizeAiText(result.summary) : result.summary}</p>
       </div>
     </div>}
     {!hasAssessment && <p className="muted">Для анализа нужна сохранённая оценка заявки.</p>}
