@@ -289,10 +289,13 @@ a { color: inherit; }
 .application-terms__plain { color: var(--muted); font-size: 13px; }
 
 .credit-summary { margin: 18px 0 2px; padding: 16px; border-radius: 15px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; color: #fff; background: var(--ink); }
-.credit-summary > div { display: flex; flex-direction: column; gap: 5px; }
+.credit-summary > div { padding: 0 10px; display: flex; flex-direction: column; gap: 5px; }
+.credit-summary > div:first-child { padding-left: 0; }
+.credit-summary > div + div { border-left: 1px solid #444; }
+.credit-summary > div:last-of-type { padding-right: 0; }
 .credit-summary small { color: #bdbdb8; font-size: 10px; }
 .credit-summary strong { font-size: 17px; }
-.credit-summary p { grid-column: 1 / -1; margin: 4px 0 0; color: #bdbdb8; font-size: 10px; line-height: 1.5; }
+.credit-summary p { grid-column: 1 / -1; margin: 4px 0 0; padding-top: 10px; border-top: 1px solid #444; color: #bdbdb8; font-size: 10px; line-height: 1.5; }
 .client-timeline { margin-bottom: 18px; }
 .client-timeline__heading, .panel-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .client-timeline__heading h2, .panel-title h2 { margin: 0 0 7px; font-size: 23px; }
